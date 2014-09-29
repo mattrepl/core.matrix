@@ -331,7 +331,7 @@
               (if (> xdims 0)
                 (let [xss (mp/get-major-slice-seq x)
                       _ (or (mp/same-shapes? xss) (error "Inconsistent slice shapes for assign!"))]
-                  (doall (map (fn [a b] (mp/assign! a b)) (mp/get-major-slice-seq m) xss)))
+                  (dorun (map (fn [a b] (mp/assign! a b)) (mp/get-major-slice-seq m) xss)))
                 (let [value (mp/get-0d x)]
                   (doseq [ms (mp/get-major-slice-seq m)] (mp/assign! ms value)))))
            :else

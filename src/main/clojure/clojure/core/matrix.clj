@@ -1450,9 +1450,8 @@
   "Counts the number of non-zero values in a numerical array.
    May perform a full array scan, but will often be quicker for specialised
    sparse matrices - sometimes as fast as O(1)"
-  ([m]
-    ;; TODO fast protocol implementation?
-    (- (mp/element-count m) (mp/zero-count m))))
+  ;; TODO: This uses PArrayMetrics nonzero-count, should names match?
+  ([m] (mp/nonzero-count m)))
 
 (defn non-zero-indices
   "Gets the non-zero indices of an array.

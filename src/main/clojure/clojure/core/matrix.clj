@@ -62,16 +62,17 @@
   "Constructs a new n-dimensional array from the given data.
 
    The data may be in one of the following forms:
-   - A valid existing array
+   - A valid existing array (which will be converted to the implementation)
    - Nested sequences of scalar values, e.g. Clojure vectors (must have regular shape)
    - A sequence of slices, each of which must be valid array data
+   - A single scalar value, which will be wrapped or coerced as necessary for the implementation
 
    If implementation is not specified, uses the current matrix library as specified
    in *matrix-implementation*
 
    If the implementation does not support the shape of data provided, may either
    create an array using a different implementation on a best-efforts basis or
-   alternatively throw an error. Users should not rely on this behaviour."
+   alternatively throw an error. This behaviour is implementation-specific."
   ([data]
     (or
       (mp/construct-matrix (implementation-check) data)
@@ -124,7 +125,9 @@
     (mp/new-vector (implementation-check implementation) length)))
 
 (defn zero-matrix
-  "Constructs a new zero-filled numerical matrix with the given dimensions."
+  "Constructs a new zero-filled numerical matrix with the given dimensions.
+
+   May produce a lightweight immutable zero matrix if supported by the implementation."
   ([rows columns]
     (mp/new-matrix (implementation-check) rows columns))
   ([implementation rows columns]
@@ -160,7 +163,7 @@
 (defn new-sparse-array
   "Creates a new sparse array with the given shape.
    New array will contain default values as defined by the implementation (usually zero).
-   If the implementation supports mutable matrices, then the new matrix will be fully mutable."
+   If the implementation supports mutable sparse matrices, then the new matrix will be fully mutable."
   ([shape]
     (mp/new-sparse-array (implementation-check) shape))
   ([implementation shape]
@@ -888,9 +891,8 @@
    otherwise slices along the first dimension. If the matrix implementation supports mutable views, these views
    can be used to mutate portions of the original array.
 
-   The key difference between 'slices' and 'slice-views' is that 'slice-views' will always return views, including
-   for the 0-dimensional case. Hence it will return a sequence of 0-dimensional scalar arrays if
-   the array is 1-dimensional."
+   The key difference between 'slices' and 'slice-views' is that 'slice-views' must always return views. In order 
+   to ensure this behaviour on mutable 1-dimensioanal arrays, it must return a sequence of 0-dimensioanal arrays."
   ([m]
     (mp/get-major-slice-view-seq m))
   ([m dimension]
@@ -938,23 +940,37 @@
         :else   (mp/main-diagonal m)))))
 
 (defn join
-  "Joins arrays together, along dimension 0. Other dimensions must be compatible"
+  "Joins arrays together, along dimension 0. For 1D vectors, this behaves as simple concatenation. 
+
+   Other dimensions must be compatible. To join arrays along a different dimension, use 'join-along' instead."
   ([& arrays]
     (reduce mp/join arrays)))
 
 (defn join-along
-  "Joins arrays together, along a specified dimension. Other dimensions must be compatible."
+  "Joins arrays together, concatenating them along the specified dimension.
+
+   Other dimensions must be compatible."
   ([dimension & arrays]
     (or
       (reduce #(mp/join-along %1 %2 dimension) arrays)
       (u/error "Failure to joins arrays"))))
 
 (defn rotate
-  "Rotates an array along specified dimensions."
+  "Rotates an array along specified dimensions. 
+
+   Elements rotated off will re-appear at the other side. The shape of the array will not be modified."
   ([m dimension shift-amount]
     (mp/rotate m dimension shift-amount))
   ([m shifts]
     (mp/rotate-all m shifts)))
+
+(defn shift
+  "Shifts all elements of an array along specified dimensions, maintaining the shape of the array.
+   New spaces shifted into the array are filled with the appropriate zero value."
+  ([m dimension shift-amount]
+    (mp/shift m dimension shift-amount))
+  ([m shifts]
+    (mp/shift-all m shifts)))
 
 (defn order
   "Reorders slices of an array along a specified dimension. Re-orders along major dimension
@@ -1267,7 +1283,9 @@
     a))
 
 (defn scale
-  "Scales a numerical array by one or more scalar factors.
+  "Scales a array by one or more scalar factors. The default implementation supports numerical arrays and
+   numbers as scalar values, however matrix implementations may extend this to support other scalar types.
+
    Returns a new scaled matrix."
   ([m factor]
     (mp/scale m factor))
@@ -1275,7 +1293,9 @@
     (mp/scale m (mp/element-multiply factor (reduce mp/element-multiply more-factors)))))
 
 (defn scale!
-  "Scales a numerical array by one or more scalar factors (in place).
+  "Scales a numerical array by one or more scalar factors (in place). The default implementation supports numerical arrays and
+   numbers as scalar values, however matrix implementations may extend this to support other scalar types.
+
    Returns the matrix after it has been mutated."
   ([m factor]
     (mp/scale! m factor)
@@ -1304,10 +1324,11 @@
 
 (defn dot
   "Computes the dot product (1Dx1D inner product) of two numerical vectors.
-   If either argument is not a vector, computes a higher dimensional inner product."
+   
+   If either argument is not a vector, should compute a higher dimensional inner product."
   ([a b]
     (or
-      (mp/vector-dot a b)
+      (mp/vector-dot a b) ;; this allows a optimised implementation of 'dot' for vectors, which should be faster
       (mp/inner-product a b))))
 
 (defn inner-product
@@ -1357,13 +1378,16 @@
     (mp/distance a b)))
 
 (defn det
-  "Calculates the determinant of a 2D square numerical matrix."
+  "Calculates the determinant of a 2D square numerical matrix.
+
+   May throw an exception if the implementation does not support computation of determinants."
   ([a]
     (mp/determinant a)))
 
 (defn inverse
-  "Calculates the inverse of a 2D numerical matrix."
-  ;; TODO: document behaviour for singular matrix?
+  "Calculates the inverse of a 2D numerical matrix. 
+
+   Returns nil if the matrix is singular. May throw an exception if the implementation does not support inverses."
   ([m]
     (mp/inverse m)))
 
@@ -1644,7 +1668,7 @@
 ;; Implementation management functions
 
 (defn current-implementation
-  "Gets the currently active matrix implementation (as a keyword)"
+  "Gets the currently active matrix implementation as a keyword, e.g. :vectorz"
   ;;{:inline (fn [] imp/*matrix-implementation*)} ;; Seems to cause caching issues when setting implementations?
   ([] imp/*matrix-implementation*))
 
@@ -1673,7 +1697,7 @@
 
 (defn set-current-implementation
   "Sets the currently active core.matrix implementation. Parameter may be either a keyword identifying the 
-   imnplementation, or an array instance from the implementation.
+   implementation, or an array instance from the implementation.
 
    This is used primarily for functions that construct new matrices, i.e. it determines the
    implementation used for expressions like: (matrix [[1 2] [3 4]])"

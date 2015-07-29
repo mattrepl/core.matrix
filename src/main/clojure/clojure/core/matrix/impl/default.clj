@@ -84,7 +84,22 @@
     (new-matrix-nd [m shape]
       (mp/new-matrix-nd [] shape))
     (supports-dimensionality? [m dimensions]
-      true))
+      true)
+  
+  ;; keyword implementation looks up implementation by keyword
+  clojure.lang.Keyword
+    (implementation-key [m] m)
+    (meta-info [m] (mp/meta-info (imp/get-canonical-object-or-throw m)))
+    (construct-matrix [m data]
+      (mp/construct-matrix (imp/get-canonical-object-or-throw m) data))
+    (new-vector [m length]
+      (mp/new-vector (imp/get-canonical-object-or-throw m) length))
+    (new-matrix [m rows columns]
+      (mp/new-matrix (imp/get-canonical-object-or-throw m) rows columns))
+    (new-matrix-nd [m shape]
+      (mp/new-matrix-nd (imp/get-canonical-object-or-throw m) shape))
+    (supports-dimensionality? [m dimensions]
+      (mp/supports-dimensionality? (imp/get-canonical-object-or-throw m) dimensions)))
 
 (extend-protocol mp/PSparse
   nil
@@ -251,8 +266,7 @@
   Object
     (numerical? [m]
       (if (mp/is-scalar? m)
-        false ;; it's a scalar but not a number, so must not be numerical
-              ;; TODO: probably needs special handling for generic numerical types?
+        false ;; it's a scalar but not a number, so we do not recognise it as numerical
         (every? number? (mp/element-seq m)))))
 
 (extend-protocol mp/PVectorOps
@@ -278,7 +292,10 @@
 
 (extend-protocol mp/PVectorDistance
   Number
-    (distance [a b] (Math/abs (double (- b a))))
+    (distance [a b] 
+      (if (number? b) 
+        (Math/abs (double (- b a)))
+        (mp/distance b a)))
   Object
     (distance [a b] (double (mp/length (mp/matrix-sub a b)))))
 
@@ -505,13 +522,13 @@
             res
             (recur (inc i) (+ res (double (mp/get-2d m i i))))))))
     (determinant [m]
-      (->> m
-           (mp/coerce-param (imp/get-canonical-object :ndarray-double))
-           (mp/determinant)))
+      (let [imp (or (imp/get-canonical-object :vectorz) (error "(let Need to load an implementation which supports determinant, e.g. vectorz-clj"))
+            m (mp/coerce-param imp m)]
+        (mp/determinant m)))
     (inverse [m]
-      (->> m
-           (mp/coerce-param (imp/get-canonical-object :ndarray-double))
-           (mp/inverse))))
+      (let [imp (or (imp/get-canonical-object :vectorz) (error "Need to load an implementation which supports inverse, e.g. vectorz-clj"))
+            mm (mp/coerce-param imp m)]
+        (mp/coerce-param m (mp/inverse mm)))))
 
 (extend-protocol mp/PTranspose
   nil
@@ -539,11 +556,13 @@
   Object
     (transpose! [m]
       (let [n (long (mp/dimension-count m 0))]
+        (when (not= n (long (mp/dimension-count m 1))) (error "transpose! requires a quare matrix"))
         (dotimes [i n]
           (dotimes [j i]
             (let [t (mp/get-2d m i j)]
               (mp/set-2d! m i j (mp/get-2d m j i))
-              (mp/set-2d! m j i t)))))))
+              (mp/set-2d! m j i t)))))
+      m))
 
 (extend-protocol mp/PRotate
   nil
@@ -573,9 +592,38 @@
     (rotate-all [m shifts] m)
   Object
     (rotate-all [m shifts]
-      (reduce (fn [m [dim shift]] (mp/rotate m dim shift))
+      (reduce (fn [m [dim shift]] (if (zero? shift) m (mp/rotate m dim shift)))
          m
          (map-indexed (fn [i v] [i v]) shifts))))
+
+(extend-protocol mp/PShift
+  Object
+    (shift [m dim shift] 
+      (let [z (mp/generic-zero m)
+            c (long (mp/dimension-count m dim))
+            sh (vec (mp/get-shape m))]
+        (cond 
+          (== shift 0) m
+          (>= shift c) (mp/broadcast-coerce m z)
+          (<= shift (- c)) (mp/broadcast-coerce m z)
+          (< shift 0) (mp/join-along 
+                        (mp/broadcast (mp/construct-matrix m z) (assoc sh dim (- shift)))
+                        (mp/submatrix m (map vector 
+                                             (vec (repeat (count sh) 0)) 
+                                             (assoc sh dim (+ c shift))))
+                        dim)
+          (> shift 0) (mp/join-along 
+                        (mp/submatrix m (map vector 
+                                             (assoc (vec (repeat (count sh) 0)) dim shift) 
+                                             (assoc sh dim (- c shift))))
+                        (mp/broadcast (mp/construct-matrix m z) (assoc sh dim shift))
+                        dim)
+          :else (error "Shouldn't be possible!!"))))
+    (shift-all [m shifts]
+      (reduce (fn [m [dim shift]] (if (zero? shift) m (mp/shift m dim shift)))
+         m
+         (map-indexed (fn [i v] [i v]) shifts))))
+
 
 (extend-protocol mp/POrder
   nil
@@ -691,7 +739,7 @@
       (error "Can't do mutable multiply on a scalar number"))
   Object
     (element-multiply! [m a]
-      (mp/element-map! m * (mp/broadcast-like m a)))
+      (mp/assign! m (mp/element-multiply m a)))
     (matrix-multiply! [m a]
       (mp/assign! m (mp/matrix-multiply m a))))
 
@@ -699,13 +747,15 @@
   Number
     (element-divide
       ([m] (/ m))
-      ([m a] (mp/element-map a #(/ m %))))
+      ([m a] (mp/pre-scale (mp/element-divide a) m)))
   Object
     (element-divide
-      ([m] (mp/element-map m #(/ %)))
+      ([m] 
+        (if (mp/get-shape m) 
+          (mp/element-map m mp/element-divide)
+          (error "Don't know how to take reciprocal of " (type m))))
       ([m a]
-        (let [[m a] (mp/broadcast-compatible m a)]
-          (mp/element-map m #(/ %1 %2) a)))))
+        (mp/element-multiply m (mp/element-divide a)))))
 
 (extend-protocol mp/PMatrixDivideMutable
   Number
@@ -725,7 +775,7 @@
     (element-sum [a] a)
   Object
     (element-sum [a]
-      (mp/element-reduce a +)))
+      (mp/element-reduce a (if (mp/numerical? a) + mp/matrix-add))))
 
 (extend-protocol mp/PElementMinMax
   Number
@@ -745,7 +795,7 @@
 (extend-protocol mp/PAddProduct
   Number
     (add-product [m a b]
-      (+ m (* a b)))
+      (mp/matrix-add (mp/element-multiply a b) m ))
   Object
     (add-product [m a b]
       (mp/matrix-add m (mp/element-multiply a b))))
@@ -761,7 +811,7 @@
 (extend-protocol mp/PAddScaled
   Number
     (add-scaled [m a factor]
-      (+ m (* a factor)))
+      (mp/matrix-add (mp/scale a factor) m))
   Object
     (add-scaled [m a factor]
       (mp/matrix-add m (mp/scale a factor))))
@@ -777,7 +827,7 @@
 (extend-protocol mp/PAddScaledProduct
   Number
     (add-scaled-product [m a b factor]
-      (+ m (* a b factor)))
+      (mp/matrix-add (mp/scale (mp/element-multiply a b) factor) m))
   Object
     (add-scaled-product [m a b factor]
       (mp/matrix-add m (mp/scale (mp/element-multiply a b) factor))))
@@ -806,14 +856,7 @@
 (extend-protocol mp/PGenericValues
   Object
     (generic-zero [m]
-       0)
-    (generic-one [m]
-       1)
-    (generic-value [m]
-       nil)
-  Object
-    (generic-zero [m]
-       0)
+      0)
     (generic-one [m]
       1)
     (generic-value [m]
@@ -1078,7 +1121,7 @@
       ([m f]
         (if (== 0 (mp/dimensionality m))
           (f (mp/get-0d m)) ;; handle case of single element
-          (let [s (map f (mp/element-seq m))]
+          (let [s (mapv f (mp/element-seq m))]
             (mp/reshape (mp/coerce-param m s)
                         (mp/get-shape m)))))
       ([m f a]
@@ -1086,14 +1129,14 @@
           (let [v (mp/get-0d m)]
             (mp/element-map a #(f v %)))
           (let [[m a] (mp/broadcast-compatible m a)
-                s (map f (mp/element-seq m) (mp/element-seq a))]
+                s (mapv f (mp/element-seq m) (mp/element-seq a))]
             (mp/reshape (mp/coerce-param m s) ;; TODO: faster construction method?
                         (mp/get-shape m)))))
       ([m f a more]
-        (let [s (map f (mp/element-seq m) (mp/element-seq a))
-              s (apply map f (list* (mp/element-seq m)
-                                    (mp/element-seq a)
-                                    (map mp/element-seq more)))]
+        (let [s (mapv f (mp/element-seq m) (mp/element-seq a))
+              s (apply mapv f (list* (mp/element-seq m)
+                                     (mp/element-seq a)
+                                     (map mp/element-seq more)))]
           (mp/reshape (mp/coerce-param m s)
                       (mp/get-shape m)))))
     (element-map!
@@ -1209,9 +1252,10 @@
         (== 0 (mp/dimensionality m))
           (if (mp/is-scalar? m) nil [])
         :else
-          (let [shapes (map mp/validate-shape (mp/get-major-slice-seq m))]
-            (if (mp/same-shapes? shapes)
-              (cons (mp/dimension-count m 0) (first shapes))
+          (let [ss (mp/get-major-slice-seq m)
+                shapes (mapv mp/validate-shape ss)]
+            (if (mp/same-shapes? ss)
+              (vec (cons (mp/dimension-count m 0) (first shapes)))
               (error "Inconsistent shapes for sub arrays in " (class m)))))))
 
 

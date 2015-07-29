@@ -122,7 +122,7 @@
     (is (clojure.core/vector? (imp/get-canonical-object :persistent-vector)))
     (is (= :persistent-vector (imp/get-implementation-key []))))
   (testing "non-existent implementation"
-    (is (thrown? Throwable (imp/get-canonical-object :random-fictitious-implementation-key))))
+    (is (nil? (imp/get-canonical-object :random-fictitious-implementation-key))))
   (testing "with-implementation"
     (is (= [1 2] (with-implementation [] (matrix [1 2]))))
     (is (= (class (double-array [1 2]))
@@ -618,6 +618,14 @@
   (is (op/== (matrix [2 0.5])
              (op/div= (mutable (matrix [4 2]))
                     (matrix [2 4])))))
+
+(deftest test-shift
+  (is (equals [1 2 3] (shift [1 2 3] [0])))
+  (is (equals [0 1 2] (shift [1 2 3] [-1])))
+  (is (equals [2 3 0] (shift [1 2 3] [1])))
+  (is (equals [0 0 0] (shift [1 2 3] [4])))
+  (is (equals [[4 0] [0 0]] (shift [[1 2] [3 4]] [1 1])))
+  (is (equals [0 0 0] (shift [1 2 3] [-5]))))
 
 (deftest test-norm
   (is (= 30.0 (li/norm (matrix [[1 2][3 4]]))))

@@ -1,15 +1,21 @@
 (ns clojure.core.matrix.impl.object-array
+  "Namespace for core.matrix implementation using nested Java object arrays. 
+
+   Array format is defined as:
+   - Top level object is a Java Object[] array
+   - If the array is 1-dimensional each element is a scalar 
+   - Otherwise each element is an sub-array with identical shape (1 dimensional or more)"
   (:require [clojure.core.matrix.protocols :as mp]
             clojure.core.matrix.impl.persistent-vector
             [clojure.core.matrix.implementations :as imp]
             [clojure.core.matrix.impl.mathsops :as mops]
-            [clojure.core.matrix.multimethods :as mm]
             [clojure.core.matrix.impl.wrappers :as wrap]
             [clojure.core.matrix.utils :refer :all])
   (:import [java.util Arrays]))
 
 (set! *warn-on-reflection* true)
 (set! *unchecked-math* true)
+;; (set! *unchecked-math* :warn-on-boxed)
 
 ;; clojure.core.matrix implementation for Java Object arrays
 
@@ -24,11 +30,7 @@
   (let [dims (long (mp/dimensionality data))]
     (cond
       (== dims 1)
-        (let [n (long (mp/dimension-count data 0))
-              r (object-array n)]
-           (dotimes [i n]
-             (aset r i (mp/get-1d data i)))
-           r)
+        (object-array (mp/element-seq data))
       (== dims 0)
         (mp/get-0d data)
       :default
@@ -50,7 +52,7 @@
 (defn object-array-coerce
   "Coerce to object array format, avoids copying sub-arrays if possible."
   ([m]
-  (if (> (mp/dimensionality m) 0)
+  (if (> (long (mp/dimensionality m)) 0)
     (if (is-object-array? m)
       (let [^objects m m
             n (count m)]
@@ -91,19 +93,19 @@
     (construct-matrix [m data]
       (construct-object-array data))
     (supports-dimensionality? [m dims]
-      (>= dims 1)))
+      (>= (long dims) 1)))
 
 
 (extend-protocol mp/PDimensionInfo
   (Class/forName "[Ljava.lang.Object;")
     (dimensionality [m]
       (let [^objects m m]
-        (+ 1 (mp/dimensionality (aget m 0)))))
+        (+ 1 (long (mp/dimensionality (aget m 0))))))
     (is-vector? [m]
       (let [^objects m m]
         (or
          (== 0 (alength m))
-         (== 0 (mp/dimensionality (aget m 0))))))
+         (== 0 (long (mp/dimensionality (aget m 0)))))))
     (is-scalar? [m] false)
     (get-shape [m]
       (let [^objects m m]
@@ -127,7 +129,7 @@
     (element-type [m]
       (let [^objects m m]
         (cond
-         (== 1 (mp/dimensionality m)) Object
+         (== 1 (long (mp/dimensionality m))) Object
          :else (mp/element-type (aget m 0))))))
 
 
@@ -203,7 +205,7 @@
         (cond
           (> dims tdims)
             (error "Can't broadcast to a lower dimensional shape")
-          (not (every? identity (map #(== %1 %2) mshape (take-last dims target-shape))))
+          (not (every? identity (map == mshape (take-last dims target-shape))))
             (error "Incompatible shapes, cannot broadcast " (vec mshape) " to " (vec target-shape))
           :else
             (reduce
@@ -219,7 +221,7 @@
 (extend-protocol mp/PMutableMatrixConstruction
   (Class/forName "[Ljava.lang.Object;")
     (mutable-matrix [m]
-      (if (> (mp/dimensionality m) 1)
+      (if (> (long (mp/dimensionality m)) 1)
         (object-array (map mp/mutable-matrix m))
         (object-array (map mp/get-0d m)))))
 
@@ -256,18 +258,18 @@
   (Class/forName "[Ljava.lang.Object;")
     (get-major-slice-seq [m]
       (let [^objects m m]
-        (if (and (> 0 (alength m)) (== 0 (mp/dimensionality (aget m 0))))
+        (if (and (> 0 (alength m)) (== 0 (long (mp/dimensionality (aget m 0)))))
           (seq (map mp/get-0d m))
           (seq m)))))
 
 (extend-protocol mp/PElementCount
-  (Class/forName "[Ljava.lang.Object;")
-    (element-count [m]
-      (let [^objects m m
-            n (alength m)]
-        (if (== n 0)
-          0
-          (* n (mp/element-count (aget m 0)))))))
+ (Class/forName "[Ljava.lang.Object;")
+   (element-count [m]
+     (let [^objects m m
+           n (alength m)]
+       (if (== n 0)
+         0
+         (* n (mp/element-count (aget m 0))))))) ;; not possible to remove boxing warning, may be bigger than 2^64
 
 (extend-protocol mp/PValidateShape
   (Class/forName "[Ljava.lang.Object;")
@@ -285,10 +287,10 @@
         (cond
           (== 0 (alength m))
             '()
-          (> (mp/dimensionality (aget m 0)) 0)
+          (> (long (mp/dimensionality (aget m 0))) 0)
             (mapcat mp/element-seq m)
           :else
-            (map mp/get-0d m))))
+            m)))
     (element-map
       ([m f]
         (object-array (map #(mp/element-map % f) m)))

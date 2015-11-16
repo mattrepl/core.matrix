@@ -2,7 +2,7 @@
 	<modelVersion>4.0.0</modelVersion>
 	<artifactId>core.matrix</artifactId>
 	<description>N-dimensional array programming API for Clojure</description>
-	<version>0.36.2-SNAPSHOT</version>
+	<version>0.45.1-SNAPSHOT</version>
 	<packaging>jar</packaging>
 
 	<url>https://github.com/mikera/core.matrix</url>
@@ -10,7 +10,7 @@
 	<parent>
 		<groupId>net.mikera</groupId>
 		<artifactId>clojure-pom</artifactId>
-		<version>0.5.0</version>
+		<version>0.6.0</version>
 	</parent>
 
 	<dependencies>
@@ -30,7 +30,7 @@
 		<dependency>
 			<groupId>org.clojure</groupId>
 			<artifactId>clojure</artifactId>
-			<version>1.8.0-alpha2</version>
+			<version>1.8.0-RC1</version>
 		</dependency>
 		<dependency>
 			<groupId>org.clojure</groupId>
@@ -46,10 +46,10 @@
 		<dependency>
 			<groupId>net.mikera</groupId>
 			<artifactId>vectorz-clj</artifactId>
-			<version>0.30.1</version>
+			<version>0.37.0</version>
 			<scope>test</scope>
 			<exclusions>
-				<exclusion>  
+				<exclusion>
 					<groupId>net.mikera</groupId>
 					<artifactId>core.matrix</artifactId>
 				</exclusion>
@@ -58,16 +58,16 @@
 		<dependency>
 			<groupId>org.clojure</groupId>
 			<artifactId>test.check</artifactId>
-			<version>0.8.0-alpha3</version>
+			<version>0.8.2</version>
 			<scope>test</scope>
 		</dependency>
 		<dependency>
-			<groupId>net.mikera</groupId>
-			<artifactId>core.matrix.testing</artifactId>
+			<groupId>clatrix</groupId>
+			<artifactId>clatrix</artifactId>
+			<version>0.5.0</version>
 			<scope>test</scope>
-			<version>0.0.4</version>
 			<exclusions>
-				<exclusion>  
+				<exclusion>  <!-- No need to include core.matrix itselfd as a test dependency! -->
 					<groupId>net.mikera</groupId>
 					<artifactId>core.matrix</artifactId>
 				</exclusion>
@@ -123,6 +123,20 @@
 
 		<pluginManagement>
 			<plugins>
+				<!--This plugin enables the creation of a test jar file. -->
+				<plugin>
+					<groupId>org.apache.maven.plugins</groupId>
+					<artifactId>maven-jar-plugin</artifactId>
+					<version>2.6</version>
+					<executions>
+						<execution>
+							<goals>
+								<goal>test-jar</goal>
+							</goals>
+						</execution>
+					</executions>
+				</plugin>
+
 				<!--This plugin's configuration is used to store Eclipse m2e settings 
 					only. It has no influence on the Maven build itself. -->
 				<plugin>

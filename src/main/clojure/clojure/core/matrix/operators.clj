@@ -1,5 +1,10 @@
 (ns clojure.core.matrix.operators
-  (:refer-clojure :exclude [* - + / vector? ==])
+  "Namespace for core.matrix operators. 
+
+   These operators provide convenient notation for common array operations (e.g. +, *, -=) that 
+   replace equivalent functions in clojure.core and operate on whole arrays at once. Behaviour 
+   for numerical scalar values remians the same as clojure.core"
+  (:refer-clojure :exclude [* - + / vector? == < <= > >= not= = min max])
   (:require [clojure.core.matrix :as m]
             [clojure.core.matrix.utils :refer [error]]))
 
@@ -76,20 +81,60 @@
 (defn +=
   "Inplace matrix addition operator"
   ([a] a)
-  ([a b] (m/add! a b)))
+  ([a b] 
+    (m/add! a b))
+  ([a b & more] 
+    (m/add! a b)
+    (doseq [m more]
+      (m/add! a m))))
 
 (defn -=
   "Inplace matrix subtraction operator"
   ([a] a)
-  ([a b] (m/sub! a b)))
+  ([a b] 
+    (m/sub! a b))
+  ([a b & more] 
+    (m/sub! a b)
+    (doseq [m more]
+      (m/sub! a m))))
 
 (defn *=
   "Inplace matrix multiplication operator"
   ([a] a)
-  ([a b] (m/mul! a b)))
+  ([a b] 
+    (m/mul! a b))
+  ([a b & more] 
+    (m/mul! a b)
+    (doseq [m more]
+      (m/mul! a m))))
 
 ;; TODO can't use /= due to clojure namespace issues
 (defn div=
   "Inplace matrix division operator"
   ([a] a)
-  ([a b] (m/div! a b)))
+  ([a b] (m/div! a b))
+  ([a b & more] 
+    (m/div! a b)
+    (doseq [m more]
+      (m/div! a m))))
+
+;; =====================================================================
+;; Comparison operators
+
+(defn min
+  "Computes the element-wise min of arrays"
+  ([a]
+    a)
+  ([a b]
+    (m/eif (m/sub a b) b a))
+  ([a b & more]
+    (reduce min (min a b) more)))
+
+(defn max 
+  "Computes the element-wise max of arrays"
+  ([a]
+    a)
+  ([a b]
+    (m/eif (m/sub a b) a b))
+  ([a b & more]
+    (reduce min (min a b) more)))

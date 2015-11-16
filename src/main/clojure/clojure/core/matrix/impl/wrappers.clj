@@ -1,4 +1,7 @@
 (ns clojure.core.matrix.impl.wrappers
+  "Implementations for specialised wrapper types.
+
+   These wrapper types enable efficient of convenient implementation of various core.matrix protocols."
   (:require [clojure.core.matrix.protocols :as mp]
             [clojure.core.matrix.implementations :as imp]
             [clojure.core.matrix.utils :as u :refer [TODO error]])
@@ -11,7 +14,7 @@
 ;; that are useful to implement certain array operations (typically as return values)
 
 (set! *warn-on-reflection* true)
-(set! *unchecked-math* true)
+(set! *unchecked-math* :warn-on-boxed)
 
 (declare wrap-slice wrap-nd wrap-scalar)
 
@@ -37,13 +40,13 @@
     (new-matrix-nd [m dims]
       (mp/new-matrix-nd [] dims))
     (construct-matrix [m data]
-      (if (== 0 (mp/dimensionality data))
+      (if (== 0 (long (mp/dimensionality data)))
         (if (mp/is-scalar? data)
           (ScalarWrapper. data)
           (ScalarWrapper. (mp/get-0d data)))
         (mp/clone data)))
     (supports-dimensionality? [m dims]
-      (== dims 0))
+      (== (long dims) 0))
 
   mp/PDimensionInfo
     (dimensionality [m]
@@ -121,17 +124,18 @@
 
   mp/PDimensionInfo
     (dimensionality [m]
-      (dec (mp/dimensionality array)))
+      (dec (long (mp/dimensionality array))))
     (get-shape [m]
       (next (mp/get-shape array)))
     (is-scalar? [m]
       false)
     (is-vector? [m]
-      (== 2 (mp/dimensionality array))) ;; i.e. the slice has dimensionality 1
+      (== 2 (long (mp/dimensionality array)))) ;; i.e. the slice has dimensionality 1
     (dimension-count [m dimension-number]
-      (if (< dimension-number 0)
-        (error "Can't access negative dimension!")
-        (mp/dimension-count array (inc dimension-number))))
+      (let [dimension-number (long dimension-number)]
+        (if (< dimension-number 0)
+         (error "Can't access negative dimension!")
+         (mp/dimension-count array (inc dimension-number)))))
 
   mp/PIndexedAccess
     (get-1d [m row]
@@ -264,7 +268,7 @@
           (u/long-array-of length)
           dim-map
           (u/object-array-of new-index-map)
-          source-position)))
+          (u/copy-long-array source-position))))
 
   mp/PDimensionInfo
     (dimensionality [m]
@@ -282,7 +286,7 @@
     (get-0d [m]
       (mp/get-nd array source-position))
     (set-0d! [m value]
-      (mp/set-nd array source-position value))
+      (mp/set-nd! array source-position value))
 
   mp/PIndexedAccess
     (get-1d [m row]
@@ -300,6 +304,7 @@
         (dotimes [i (alength shape)]
           (set-source-index ix i (nth indexes i)))
         (mp/get-nd array ix)))
+    
     mp/PIndexedSettingMutable
     (set-1d! [m row v]
       (let [ix (u/copy-long-array source-position)
@@ -312,10 +317,26 @@
         (set-source-index ix 1 column)
         (mp/set-nd! array ix v)))
     (set-nd! [m indexes v]
-      (let [^longs ix (u/copy-long-array source-position)]
+      (let [^longs ix (u/copy-long-array source-position)
+            n (alength shape)]
+        (when (not= n (count indexes))
+          (error "set-nd! called with index " (vec indexes) " indexes on wrapped array of shape " shape))
         (dotimes [i (alength shape)]
           (set-source-index ix i (nth indexes i)))
         (mp/set-nd! array ix v)))
+    
+    mp/PSliceView2
+      (get-slice-view [m dim i]
+        (let [i (long i)
+              dim (long dim)
+              nsp (u/copy-long-array source-position)
+              sdim (long (aget dim-map dim))]
+          (aset nsp sdim i)
+          (NDWrapper. array 
+                      (u/abutnth dim shape) 
+                      (u/abutnth dim dim-map)
+                      (u/abutnth dim index-maps)
+                      nsp))) 
 
   Object
     (toString [m]
@@ -325,7 +346,7 @@
   "Creates a view of a major slice of an array."
   ([m slice]
     (let [slice (long slice)]
-      (when (>= slice (mp/dimension-count m 0)) (error "Slice " slice " does not exist on " (class m)))
+      (when (>= slice (long (mp/dimension-count m 0))) (error "Slice " slice " does not exist on " (class m)))
       (SliceWrapper. m slice))))
 
 (defn wrap-nd
@@ -337,20 +358,22 @@
                   shp
                   (u/long-range dims)
                   (object-array (map #(u/long-range (mp/dimension-count m %)) (range dims)))
-                  (long-array (repeat dims 0))))))
+                  (long-array dims)))))
+
 (defn wrap-selection
+  "Wraps an array using a selection of indexes for each dimension."
   [m indices]
   (let [shp (long-array (map count indices))
         dims (count shp)]
     (NDWrapper.
-     m
-     shp
-     (long-array (range dims))
-     (object-array (map long-array indices))
-     (long-array (repeat dims 0))
-     )))
+      m
+      shp
+      (long-array (range dims))
+      (object-array (map long-array indices))
+      (long-array (repeat dims 0)))))
 
 (defn wrap-submatrix
+  "Wraps an array using a selection of [start length] ranges for each dimension."
   [m dim-ranges]
   (let [shp (mp/get-shape m)
         dims (count shp)
@@ -362,7 +385,7 @@
       new-shape
       (long-array (range (count shp)))
       (object-array
-        (map (fn [[start len]] (long-array (range start (+ start len))))
+        (map (fn [[^long start ^long len]] (long-array (range start (+ start len))))
              dim-ranges))
       (long-array (repeat dims 0)))))
 
@@ -370,9 +393,9 @@
   "Wraps an array with broadcasting to the given target shape."
   [m target-shape]
   (let [tshape (long-array target-shape)
-        tdims (count tshape)
+        tdims (alength tshape)
         mshape (long-array (mp/get-shape m))
-        mdims (count mshape)
+        mdims (alength mshape)
         dim-map (long-array (concat (repeat (- tdims mdims) -1) (range mdims)))]
     ;;(println "mshape:" (seq mshape))
     ;;(println "mdims:" mdims)
@@ -383,7 +406,8 @@
       dim-map
       (object-array
         (for [i (range tdims)]
-          (let [arr (long-array (aget tshape i))
+          (let [i (long i)
+                arr (long-array (aget tshape i))
                 mdim (- i (- tdims mdims))]
             (when (>= mdim 0)
               (let [mdc (aget mshape mdim)

@@ -3,6 +3,7 @@
   (:require [clojure.core.matrix.compliance-tester :as compliance]
             [clojure.core.matrix :refer :all]
             [clojure.core.matrix.utils :refer [error?]]
+            [clojure.core.matrix.protocols :as mp]
             [clojure.test :refer :all]))
 
 ;; Tests for core.matrix functions on regular scalar numerical values
@@ -44,7 +45,10 @@
 
 (deftest test-min-max
   (is (== 3 (emin 3)))
-  (is (== 2 (emax 2))))
+  (is (== 2 (emax 2)))
+  (is (== 2 (clamp 1 2 5)))
+  (is (== 5 (clamp 8 2 5)))
+  (is (error? (clamp 3 6 1))))
 
 (deftest test-compute-matrix
   (is (equals 3 (compute-matrix [] (fn [] 3)))))
@@ -52,6 +56,14 @@
 (deftest test-broadcasting
   (is (equals [2 2 2] (broadcast 2 [3])))
   (is (equals [2] (as-vector 2))))
+
+(deftest test-select
+  (testing "mp/select on numbers with a non empty argument should throw an error"
+    (is (thrown? RuntimeException
+                 (mp/select 12 [[]]))))
+  (testing "calling select on numbers with an empty argument should return itself"
+    (is (= (select 1) 1))
+    (is (= (mp/select 0 []) 0))))
 
 (deftest instance-tests
   (compliance/instance-test 0)

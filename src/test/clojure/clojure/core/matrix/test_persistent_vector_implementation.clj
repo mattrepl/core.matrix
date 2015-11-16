@@ -6,6 +6,7 @@
             [clojure.core.matrix.compliance-tester :as compliance]
             [clojure.core.matrix :refer :all]
             [clojure.core.matrix.utils :refer [error?]]
+            [clojure.core.matrix.protocols :as mp]
             [clojure.test :refer :all]))
 
 ;; Tests for the implementation of core.matrix on Clojure persistent vectors
@@ -138,8 +139,7 @@
   (testing "basic"
     (is (equals [2 3] (emap inc [1 2]))))
   (testing "nested implementations"
-    (is (equals [[2 3]] (emap inc [(double-array [1 2])])))
-    (is (equals [[2 3]] (emap inc [[(wrap/wrap-scalar 1) (wrap/wrap-scalar 2)]])))))
+    (is (equals [[2 3]] (emap inc [(double-array [1 2])])))))
 
 (deftest test-eseq
   (testing "basic"
@@ -147,14 +147,7 @@
   (testing "nested implementations"
     (is (= [1 2] (eseq [[1 2]])))
     (is (= [1 2] (eseq [[1] [2]])))
-    (is (equals [1 2] (eseq [(double-array [1 2])])))
-    (is (= [1 2] (eseq [[(wrap/wrap-scalar 1) (wrap/wrap-scalar 2)]])))))
-
-(deftest test-contained-scalar-array
-  (let [a [(scalar-array 1) 2]]
-    (is (== 1 (dimensionality a)))
-    (is (vec? a))
-    (is (= [1 2] (slices a)))))
+    (is (= [1.0 2.0] (eseq [(double-array [1 2])])))))
 
 (deftest test-trace
   (is (equals 6 (trace [[1 2 3] [4 5 6]]))))
@@ -200,11 +193,29 @@
     (testing "add row j to i and replace i with the result"
       (is (= (matrix [[3 3] [1 1]]) (add-row (matrix [[1 1] [1 1]]) 0 1 2)))))
 
+(deftest test-native
+  (is (nil? (native [1 2 3])))
+  (is (not (native? [1 2 3]))))
+
 (deftest test-bad-shapes
   (is (error? (array [1 [2 3]])))
   (is (error? (array [[1 2] [2 3 4]])))
   (is (error? (array [[1 2 3 4] [2 3 4]])))
   (is (error? (array [[1 2 3 4] 5]))))
+
+(deftest test-select
+  (let [m [[0 1 2 3] [4 5 6 7] [8 9 10 11]]]
+    (testing "proper select usage behaviour"
+      (is (= (select m :all :all) m))
+      (is (= (select m :all 0) [0 4 8]))
+      (is (= (select m [0 2] [1 3]) [[1 3] [9 11]])))
+    (testing "invalid argument to mp/select"
+      (is (thrown? RuntimeException (mp/select m [[0]]))))
+    (testing "invlaid argument to select"
+      (is (thrown? RuntimeException (select m nil))))))
+
+(deftest test-clamp
+  (is (error? (clamp [[1 2] [3 4]] 6 1))))
 
 ;; run complicance tests
 

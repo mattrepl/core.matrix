@@ -1,7 +1,9 @@
 (ns clojure.core.matrix.test-double-array
+  (:refer-clojure :exclude [==])
   (:require [clojure.core.matrix.protocols :as mp]
             [clojure.core.matrix.compliance-tester]
             [clojure.core.matrix :refer :all]
+            [clojure.core.matrix.operators :refer [==]]
             [clojure.core.matrix.utils :refer [error?]]
             [clojure.test :refer :all]))
 
@@ -19,13 +21,13 @@
 (deftest test-create
   (testing "making a double array"
     (let [da (matrix :double-array [1 2])]
-      (is (= [1.0 2.0] (seq da)))
-      (is (= [1.0 2.0] (eseq da)))
-      (is (= (class (double-array [1])) (class da)))))
+      (is (equals [1.0 2.0] (seq da)))
+      (is (e= [1.0 2.0] (eseq da)))
+      (is (identical? (class (double-array [1])) (class da)))))
   (testing "coercion from persistent vector"
     (let [da (matrix :double-array [1 2])]
-      (is (= [2.0 4.0] (seq (coerce da [2 4]))))
-      (is (= (class da) (class (coerce da [2 4])))))))
+      (is (e= [2.0 4.0] (seq (coerce da [2 4]))))
+      (is (identical? (class da) (class (coerce da [2 4])))))))
 
 (deftest test-higher-dimensions
   (let [m [[[1 2] [3 4]]]
@@ -78,7 +80,7 @@
     (let [da (matrix :double-array [1 2])]
       (is (= [2.0 3.0] (seq (emap inc da))))
       (emap! inc da)
-      (is (= [2.0 3.0] (eseq da)))))
+      (is (= [2.0 3.0] (vec da)))))
   (testing "nested double arrays"
     (is (= [1.0 2.0 3.0 4.0] (eseq [(double-array [1 2]) (double-array [3 4])]))))
   (testing "mapping indexed"
@@ -168,6 +170,13 @@
     (is (equals [2.0 6.0] (vec a)))
     (is (equals [2.0 6.0] a))))
 
+(deftest test-scale-add
+  (let [v (double-array [1 2 3])]
+    (scale-add! v 2.0 [10 20 30] 3 100)
+    (is (equals [132 164 196] (array [] v)))
+    (scale-add! v 0.0 [1 2 3] 2 [-1 -10 10])
+    (is (equals [1 -6 16] v))))
+
 (deftest test-element-ops
   (let [a (double-array [5 1 7 8 4])]
     (is (== 1 (emin a)))
@@ -184,6 +193,20 @@
   (clojure.core.matrix.compliance-tester/instance-test (double-array [1]))
   (clojure.core.matrix.compliance-tester/instance-test (double-array [1 2]))
   (clojure.core.matrix.compliance-tester/instance-test (double-array [-1 4 2 7 -3])))
+
+(deftest test-select
+  (testing "select ops"
+    (let [da (double-array [1.2 3.4 5.6 7.8 9.1])]
+      (let [selected (select da :all)]
+        (is (= (class selected) (Class/forName "[D")))
+        (is (== selected da))
+        (is (not= selected da)))
+      (let [selected (select da 0)]
+        (is (scalar? selected))
+        (is (= 1.2 selected)))
+      (let [selected (select da [1 2])]
+        (is (= (class selected) (Class/forName "[D")))
+        (is (== selected [3.4 5.6]))))))
 
 (deftest compliance-test
   (clojure.core.matrix.compliance-tester/compliance-test (double-array [0.23])))

@@ -2,7 +2,6 @@
   (:require [clojure.core.matrix.impl.double-array :as da]
             [clojure.core.matrix.protocols :as mp]
             [clojure.core.matrix.impl.wrappers :as wrap]
-            [clojure.core.matrix.multimethods :as mm]
             [clojure.core.matrix.impl.mathsops :as mops]
             [clojure.core.matrix.implementations :as imp]
             [clojure.core.matrix.utils :refer :all])
@@ -21,6 +20,7 @@
 
 (set! *warn-on-reflection* true)
 (set! *unchecked-math* true)
+;; (set! *unchecked-math* :warn-on-boxed) ;; use to check for boxing
 
 ;; ============================================================
 ;; Utility functions for default implementations
@@ -34,8 +34,8 @@
   "Returns true if matrix is square (2D with same number of rows and columns)"
   ([m]
     (and
-      (== 2 (mp/dimensionality m))
-      (== (mp/dimension-count m 0) (mp/dimension-count m 1)))))
+      (== 2 (long (mp/dimensionality m)))
+      (== (long (mp/dimension-count m 0)) (long (mp/dimension-count m 1))))))
 
 (defn- calc-element-count
   "Returns the total count of elements in an array"
@@ -113,6 +113,17 @@
     (sparse [m]
       m))
 
+(extend-protocol mp/PNative
+  nil
+    (native [m]
+      nil)
+    (native? [m] false)
+  Object
+    (native [m]
+      nil) ;; allow fall through if native coercion is not directly supported
+    (native? [m]
+      false))
+
 (extend-protocol mp/PNewSparseArray
   Object
     (new-sparse-array [m shape]
@@ -172,10 +183,10 @@
   nil
     (nonzero-count [m] 1)
   Number
-    (nonzero-count [m] (if (zero? m) 0 1))
+    (nonzero-count [m] (if (zero? m) 0 1)) ;; not possible to remove boxing warning
   Object
     (nonzero-count [m]
-      (mp/element-reduce m (fn [cnt e] (if (zero? e) cnt (inc cnt))) 0)))
+      (mp/element-reduce m (fn [cnt e] (if (zero? e) cnt (inc cnt))) 0))) ;; not possible to remove boxing warning
 
 (extend-protocol mp/PZeroDimensionConstruction
   nil
@@ -194,6 +205,16 @@
       nil)
     (set-0d! [m value]
       (error "Can't set the value of nil!"))
+  String
+    (get-0d [m]
+      m)
+    (set-0d! [m value]
+      (error "Can't set a string value!"))
+  clojure.lang.Keyword
+    (get-0d [m]
+      m)
+    (set-0d! [m value]
+      (error "Can't set a keyword!"))
   Number
     (get-0d [m]
       m)
@@ -201,7 +222,8 @@
       (error "Can't set a scalar number!"))
   Object
     (get-0d [m]
-      (if (mp/is-scalar? m) m (mp/get-nd m [])))
+      ;; assume this is a scalar value
+      m)
     (set-0d! [m value]
       (mp/set-nd! m [] value)))
 
@@ -286,7 +308,7 @@
     (length [a]
       (Math/sqrt (double (mp/length-squared a))))
     (length-squared [a]
-      (mp/element-reduce a (fn [r x] (+ r (* x x))) 0))
+      (mp/element-reduce a (fn [^double r ^double x] (+ r (* x x))) 0.0))
     (normalise [a]
       (mp/scale a (/ 1.0 (Math/sqrt (double (mp/length-squared a)))))))
 
@@ -294,7 +316,7 @@
   Number
     (distance [a b] 
       (if (number? b) 
-        (Math/abs (double (- b a)))
+        (Math/abs (- (double b) (double a)))
         (mp/distance b a)))
   Object
     (distance [a b] (double (mp/length (mp/matrix-sub a b)))))
@@ -336,6 +358,7 @@
           (== 0 dims) (mp/set-0d! m (mp/get-0d x))
           (== 1 dims)
             (if (instance? ISeq x)
+              ;; specialised handling for sequence (since indexed access would be O(n^2))
               (let [x (seq x)
                     msize (long (mp/dimension-count m 0))]
                 (loop [i 0 s (seq x)]
@@ -344,22 +367,27 @@
                     (do
                       (mp/set-1d! m i (first s))
                       (recur (inc i) (next s))))))
-             (let [xdims (long (mp/dimensionality x))
+              ;; otherwise use indexed access
+              (let [xdims (long (mp/dimensionality x))
                     msize (long (mp/dimension-count m 0))]
-                (if (== 0 xdims)
-                  (let [value (mp/get-0d x)]
-                    (dotimes [i msize] (mp/set-1d! m i value)))
-                  (dotimes [i msize] (mp/set-1d! m i (mp/get-1d x i))))))
-
+                (cond 
+                  (== 0 xdims)
+                    (let [value (mp/get-0d x)]
+                      (dotimes [i msize] (mp/set-1d! m i value)))
+                  (== 1 xdims)
+                    (do 
+                      (when (not= msize (long (mp/dimension-count x 0))) (error "Mismatched shapes in assign!"))
+                      (dotimes [i msize] (mp/set-1d! m i (mp/get-1d x i))))
+                  :else
+                    (error "Can't assign! withan argument of higher dimensionality"))))
 
           (array? m)
             (let [xdims (long (mp/dimensionality x))]
-              (if (pos? xdims)
+              (if (== dims xdims)
                 (let [xss (mp/get-major-slice-seq x)
                       _ (or (mp/same-shapes? xss) (error "Inconsistent slice shapes for assign!"))]
-                  (doall (map (fn [a b] (mp/assign! a b)) (mp/get-major-slice-seq m) xss)))
-                (let [value (mp/get-0d x)]
-                  (doseq [ms (mp/get-major-slice-seq m)] (mp/assign! ms value)))))
+                  (doall (map (fn [a b] (mp/assign! a b)) (mp/get-major-slice-view-seq m) xss)))
+                (doseq [ms (mp/get-major-slice-view-seq m)] (mp/assign! ms x))))
            :else
               (error "Can't assign to a non-array object: " (class m)))))
     (assign-array!
@@ -427,9 +455,11 @@
       0)
   Number
      (zero-count [m]
-       (if (zero? m) 1 0))
+       ;; not possible to remove boxing warning, m may be any numeric type
+       (if (zero? m) 1 0)) 
   Object
      (zero-count [m]
+       ;; not possible to remove boxing warning, m may be any numeric type
        (mp/element-reduce m (fn [acc e] (if (zero? e) (inc acc) acc)) 0)))
 
 
@@ -444,6 +474,19 @@
     (mutable-matrix [m]
       (construct-mutable-matrix m)))
 
+(extend-protocol mp/PMutableCoercion
+  nil
+    (ensure-mutable [m]
+      (wrap/wrap-scalar m))
+  Number
+    (ensure-mutable [m]
+      (wrap/wrap-scalar m))
+  Object
+    (ensure-mutable [m]
+      (if (mp/is-mutable? m)
+        m
+        (construct-mutable-matrix m))))
+
 (extend-protocol mp/PComputeMatrix
   Object
     (compute-matrix [m shape f]
@@ -457,6 +500,18 @@
     (is-vector? [m] false)
     (get-shape [m] nil)
     (dimension-count [m i] (error "nil has zero dimensionality, cannot get count for dimension: " i))
+  clojure.lang.Keyword
+    (dimensionality [m] 0)
+    (is-scalar? [m] true)
+    (is-vector? [m] false)
+    (get-shape [m] nil)
+    (dimension-count [m i] (error "Keyword has zero dimensionality, cannot get count for dimension: " i))
+  String
+    (dimensionality [m] 0)
+    (is-scalar? [m] true)
+    (is-vector? [m] false)
+    (get-shape [m] nil)
+    (dimension-count [m i] (error "String has zero dimensionality, cannot get count for dimension: " i))
   Number
     (dimensionality [m] 0)
     (is-scalar? [m] true)
@@ -467,18 +522,18 @@
     (dimensionality [m]
       (cond
         (.isArray (.getClass m))
-          (let [n (count m)]
-            (if (> n 0) (inc (mp/dimensionality (nth m 0))) 1))
+          (let [n (long (count m))]
+            (if (> n 0) (inc (long (mp/dimensionality (nth m 0)))) 1))
         :else 0))
     (is-vector? [m]
       (cond
         (.isArray (.getClass m))
-          (let [n (count m)]
-            (or (== n 0) (== 0 (mp/dimensionality (nth m 0)))))
+          (let [n (long (count m))]
+            (or (== n 0) (== 0 (long (mp/dimensionality (nth m 0))))))
         :else false))
     (is-scalar? [m]
       (cond
-        (.isArray (.getClass m)) false
+        (.isArray (.getClass m)) false ;; Java arrays are core.matrix arrays
         :else true)) ;; assume objects are scalars unless told otherwise
     (get-shape [m]
       (cond
@@ -487,20 +542,21 @@
             (if (== n 0) [0] (cons n (mp/get-shape (nth m 0)))))
         :else nil))
     (dimension-count [m i]
-      (cond
-        (.isArray (.getClass m))
-          (if (== i 0) (count m) (mp/dimension-count (nth m 0) (dec i)))
-        (== 0 i)
-          (count m)
-        :else (error "Can't determine count of dimension " i " on Object: " (class m)))))
+      (let [i (long i)]
+        (cond
+          (.isArray (.getClass m))
+            (if (== i 0) (count m) (mp/dimension-count (nth m 0) (dec i)))
+          (== 0 i)
+            (count m)
+          :else (error "Can't determine count of dimension " i " on Object: " (class m))))))
 
 (extend-protocol mp/PSameShape
   nil
     (same-shape? [a b]
-      (== 0 (mp/dimensionality b)))
+      (== 0 (long (mp/dimensionality b))))
   Number
     (same-shape? [a b]
-      (== 0 (mp/dimensionality b)))
+      (== 0 (long (mp/dimensionality b))))
   Object
     (same-shape? [a b]
       (same-shape-object? (mp/get-shape a) (mp/get-shape b))))
@@ -511,9 +567,10 @@
     (trace [m] m)
   Number
     (trace [m] m)
+    (inverse [m] (/ m))
   Object
     (trace [m]
-      (when-not (== 2 (mp/dimensionality m)) (error "Trace requires a 2D matrix"))
+      (when-not (== 2 (long (mp/dimensionality m))) (error "Trace requires a 2D matrix"))
       (let [rc (long (mp/dimension-count m 0))
             cc (long (mp/dimension-count m 1))
             dims (Math/min rc cc)]
@@ -542,10 +599,10 @@
        (case (long (mp/dimensionality m))
          0 m
          1 m
-         2 (apply mapv vector (map
+         2 (apply mapv vector (mapv
                                #(mp/convert-to-nested-vectors %)
                                (mp/get-major-slice-seq m)))
-         (let [ss (map mp/transpose (mp/get-major-slice-seq m))]
+         (let [ss (mapv mp/transpose (mp/get-major-slice-seq m))]
            ;; note that function must come second for mp/element-map
            (case (count ss)
              1 (mp/element-map (mp/convert-to-nested-vectors (first ss)) vector)
@@ -571,18 +628,20 @@
     (rotate [m dim places] m)
   Object
     (rotate [m dim places]
-      (cond
-        (<= (mp/dimensionality m) 0)
-          m
-        (== 0 dim)
-          (let [ss (mp/get-major-slice-seq m)
-                c (long (mp/dimension-count m 0))
-                sh (long (if (pos? c) (long (mod places c)) 0))]
-            (if (== sh 0)
-              m
-              (vec (concat (take-last (- c sh) ss) (take sh ss)))))
-        :else
-          (mp/rotate (mp/convert-to-nested-vectors m) dim places))))
+      (let [dim (long dim)
+            places (long places)]
+        (cond
+          (<= (long (mp/dimensionality m)) 0)
+            m
+          (== 0 dim)
+            (let [ss (mp/get-major-slice-seq m)
+                  c (long (mp/dimension-count m 0))
+                  sh (long (if (pos? c) (long (mod places c)) 0))]
+              (if (== sh 0)
+                m
+                (vec (concat (take-last (- c sh) ss) (take sh ss)))))
+         :else
+           (mp/rotate (mp/convert-to-nested-vectors m) dim places)))))
 
 
 (extend-protocol mp/PRotateAll
@@ -592,14 +651,15 @@
     (rotate-all [m shifts] m)
   Object
     (rotate-all [m shifts]
-      (reduce (fn [m [dim shift]] (if (zero? shift) m (mp/rotate m dim shift)))
+      (reduce (fn [m [^long dim ^long shift]] (if (zero? shift) m (mp/rotate m dim shift)))
          m
          (map-indexed (fn [i v] [i v]) shifts))))
 
 (extend-protocol mp/PShift
   Object
     (shift [m dim shift] 
-      (let [z (mp/generic-zero m)
+      (let [shift (long shift)
+            z (mp/generic-zero m)
             c (long (mp/dimension-count m dim))
             sh (vec (mp/get-shape m))]
         (cond 
@@ -620,7 +680,7 @@
                         dim)
           :else (error "Shouldn't be possible!!"))))
     (shift-all [m shifts]
-      (reduce (fn [m [dim shift]] (if (zero? shift) m (mp/shift m dim shift)))
+      (reduce (fn [m [dim ^long shift]] (if (zero? shift) m (mp/shift m dim shift)))
          m
          (map-indexed (fn [i v] [i v]) shifts))))
 
@@ -644,7 +704,7 @@
       ([m dim indices]
         (mp/order (mp/convert-to-nested-vectors m) dim indices))))
 
-
+;; not possible to remove boxing warning, may be any numeric type
 (extend-protocol mp/PMatrixProducts
   Number
     (inner-product [m a]
@@ -662,8 +722,8 @@
           (mp/pre-scale a m)
         (mp/is-scalar? a)
           (mp/scale m a)
-        (== 1 (mp/dimensionality m))
-          (if (== 1 (mp/dimensionality a))
+        (== 1 (long (mp/dimensionality m)))
+          (if (== 1 (long (mp/dimensionality a)))
             (mp/element-sum (mp/element-multiply m a))
             (reduce mp/matrix-add (map (fn [sl x] (mp/scale sl x))
                                        (mp/get-major-slice-seq a)
@@ -708,22 +768,21 @@
                          [mcols]))
          (and (== mdims 2) (== adims 2))
            (let [mutable (mp/is-mutable? m)
-                 [mrows mcols] (mp/get-shape m)
-                 [arows acols] (mp/get-shape a)
+                 [^long mrows ^long mcols] (mp/get-shape m)
+                 [^long arows ^long acols] (mp/get-shape a)
                  new-m-type (if mutable m (imp/get-canonical-object :ndarray))
                  new-m (mp/new-matrix new-m-type mrows acols)]
-             (do
-               ;; TODO: optimize cache-locality (http://bit.ly/12FgFbl)
-               (c-for [i (long 0) (< i mrows) (inc i)
-                       j (long 0) (< j acols) (inc j)]
-                 (mp/set-2d! new-m i j 0))
-                (c-for [i (long 0) (< i mrows) (inc i)
-                       j (long 0) (< j acols) (inc j)
-                       k (long 0) (< k mcols) (inc k)]
-                 (mp/set-2d! new-m i j (+ (mp/get-2d new-m i j)
-                                          (* (mp/get-2d m i k)
-                                             (mp/get-2d a k j)))))
-               new-m)))))
+             ;; TODO: optimize cache-locality (http://bit.ly/12FgFbl)
+             (c-for [i (long 0) (< i mrows) (inc i)
+                     j (long 0) (< j acols) (inc j)]
+               (mp/set-2d! new-m i j 0))
+             (c-for [i (long 0) (< i mrows) (inc i)
+                    j (long 0) (< j acols) (inc j)
+                    k (long 0) (< k mcols) (inc k)]
+               (mp/set-2d! new-m i j (+ (mp/get-2d new-m i j)
+                                        (* (mp/get-2d m i k)
+                                           (mp/get-2d a k j)))))
+             new-m))))
     (element-multiply [m a]
       (if (number? a)
         (mp/scale m a)
@@ -764,10 +823,10 @@
 	    ([m a] (error "Can't do mutable divide on a scalar numer")))
   Object
 	  (element-divide!
-	    ([m] (mp/element-map! m #(/ %)))
+	    ([m] (mp/element-map! m /))
 	    ([m a]
 	       (let [[m a] (mp/broadcast-compatible m a)]
-	         (mp/element-map! m #(/ %1 %2) a)))))
+	         (mp/element-map! m / a)))))
 
 ;; matrix element summation
 (extend-protocol mp/PSummable
@@ -777,10 +836,15 @@
     (element-sum [a]
       (mp/element-reduce a (if (mp/numerical? a) + mp/matrix-add))))
 
+;; not possible to eliminate boxing warnings - needs to handle any numeric type
 (extend-protocol mp/PElementMinMax
   Number
     (element-min [m] m)
     (element-max [m] m)
+    (element-clamp [m a b]
+      (if-not (<= a b)
+        (error "min argument: " a " should be <= max argument: " b)
+        (if (< m a) a (if (> m b) b m))))
   Object
     (element-min [m]
       (mp/element-reduce m
@@ -789,7 +853,82 @@
     (element-max [m]
       (mp/element-reduce m
                        (fn [best v] (if (or (not best) (> v best)) v best))
-                       nil)))
+                       nil))
+    (element-clamp [m a b]
+      (if-not (<= a b)
+        (error "min argument: " a " should be <= max argument: " b)
+        (mp/element-map m #(if (< %1 a) a (if (> %1 b) b %1))))))
+
+(extend-protocol mp/PCompare
+  Number
+    (element-compare [a b] 
+      (if (number? b) 
+        (long (mops/signum (- a b)))
+        (mp/signum (mp/matrix-sub a b))))
+    (element-if [m a b] 
+      (let [[a b] (mp/broadcast-same-shape a b)] 
+        (if (> m 0) a b)))
+    (element-lt [m a] 
+      (if (number? a) 
+        (if (< m a) 1 0)
+        (mp/element-gt a m)))
+    (element-le [m a] 
+      (if (number? a)
+        (if (<= m a) 1 0)
+        (mp/element-ge a m)))
+    (element-gt [m a] 
+      (if (number? a) 
+        (if (> m a) 1 0)
+        (mp/element-lt a m)))
+    (element-ge [m a] 
+      (if (number? a) 
+        (if (>= m a) 1 0)
+        (mp/element-le a m)))
+    (element-ne [m a] 
+      (if (number? a) 
+        (if (not= m a) 1 0)
+        (mp/element-ne a m)))
+    (element-eq [m a] 
+      (if (number? a)
+        (if (= m a) 1 0)
+        (mp/element-eq a m)))
+  Object
+    (element-compare [a b] 
+      (mp/element-map (mp/matrix-sub a b) #(long (mops/signum %))))
+    (element-if [m a b]
+      (cond 
+        (and (number? a) (number? b))
+          (mp/element-map m #(if (> %1 0) a b))
+        (number? a)
+          (mp/element-map m #(if (> %1 0) a %2) b)
+        (number? b)
+          (mp/element-map m #(if (> %1 0) %2 b) a)
+        :else (mp/element-map m #(if (> %1 0) %2 %3) a [b])) ;; note we need [b] because this is a `more` argument
+      )
+    (element-lt [m a]
+      (if (number? a)
+        (mp/element-map m #(if (< %1 a) 1 0))
+        (mp/element-map m #(if (< %1 %2) 1 0) a)))
+    (element-le [m a]
+      (if (number? a)
+        (mp/element-map m #(if (<= %1 a) 1 0))
+        (mp/element-map m #(if (<= %1 %2) 1 0) a)))
+    (element-gt [m a]
+      (if (number? a)
+        (mp/element-map m #(if (> %1 a) 1 0))
+        (mp/element-map m #(if (> %1 %2) 1 0) a)))
+    (element-ge [m a]
+      (if (number? a)
+        (mp/element-map m #(if (>= %1 a) 1 0))
+        (mp/element-map m #(if (>= %1 %2) 1 0) a)))
+    (element-ne [m a]
+      (if (number? a)
+        (mp/element-map m #(if-not (== %1 a) 1 0))
+        (mp/element-map m #(if-not (== %1 %2) 1 0) a)))
+    (element-eq [m a]
+      (if (number? a)
+        (mp/element-map m #(if (== %1 a) 1 0))
+        (mp/element-map m #(if (== %1 %2) 1 0) a))))
 
 ;; add-product operations
 (extend-protocol mp/PAddProduct
@@ -840,6 +979,22 @@
     (add-scaled-product! [m a b factor]
       (mp/matrix-add! m (mp/scale (mp/element-multiply a b) factor))))
 
+;; not possible to eliminate boxing warnings - needs to handle any numeric type
+(extend-protocol mp/PScaleAdd
+  Object
+    (scale-add! [m1 a m2 b constant]
+      (mp/element-multiply! m1 a)
+      (when-not (and (number? b) (zero? b)) (mp/add-product! m1 m2 b))
+      (when-not (and (number? constant) (zero? constant)) (mp/matrix-add! m1 constant))
+      m1))
+
+(extend-protocol mp/PAddInnerProductMutable
+  Object
+    (add-inner-product! [m a b]
+      (mp/matrix-add! m (mp/inner-product a b)))
+    (add-inner-product! [m a b factor]
+      (mp/add-scaled! m (mp/inner-product a b) factor)))
+
 ;; type of matrix element
 ;; the default is to assume any type is possible
 (extend-protocol mp/PTypeInfo
@@ -876,12 +1031,13 @@
   Object
     (vector-transform [m a]
       (cond
-        (== 2 (mp/dimensionality m)) (mp/matrix-multiply m a)
+        (== 2 (long (mp/dimensionality m))) (mp/matrix-multiply m a)
         :else (error "Don't know how to transform using: " (class m))))
     (vector-transform! [m a]
       (mp/assign! a (mp/vector-transform m a))))
 
 ;; matrix scaling
+;; not possible to eliminate boxing warnings - needs to handle any numeric type
 (extend-protocol mp/PMatrixScaling
   Number
     (scale [m a]
@@ -898,6 +1054,7 @@
     (pre-scale [m a]
       (mp/element-map m (partial * a))))
 
+;; not possible to eliminate boxing warnings - needs to handle any numeric type
 (extend-protocol mp/PMatrixMutableScaling
   Number
     (scale! [m a]
@@ -912,14 +1069,17 @@
       (mp/element-map! m (partial * a))
       m))
 
+;; not possible to eliminate boxing warnings - needs to handle any numeric type
 (extend-protocol mp/PMatrixAdd
   ;; matrix add for scalars
   Number
     (matrix-add [m a]
-      (if (number? a) (+ m a)
+      (if (number? a) 
+        (+ m a)
         (mp/matrix-add a m)))
     (matrix-sub [m a]
-      (if (number? a) (- m a)
+      (if (number? a) 
+        (- m a)
         (mp/negate (mp/matrix-sub a m))))
   ;; default impelementation - assume we can use emap?
   Object
@@ -955,9 +1115,10 @@
       (- m))
   Object
     (negate [m]
-      (mp/scale m -1)))
+      (mp/scale m -1.0)))
 
 ;; equality checking
+;; not possible to eliminate boxing warnings - needs to handle any numeric type
 (extend-protocol mp/PMatrixEquality
   nil
     (matrix-equals [a b]
@@ -973,7 +1134,7 @@
       (cond
         (identical? a b) true
         (mp/same-shape? a b)
-          (if (== 0 (mp/dimensionality a))
+          (if (== 0 (long (mp/dimensionality a)))
             (== (mp/get-0d a) (scalar-coerce b))
             (not-any? false? (map == (mp/element-seq a) (mp/element-seq b))))
         :else false)))
@@ -984,7 +1145,7 @@
       (or
         (nil? b)
         (and
-          (== 0 (mp/dimensionality b))
+          (== 0 (long (mp/dimensionality b)))
           (nil? (mp/get-0d b)))))
   Object
     (value-equals [a b]
@@ -1004,7 +1165,7 @@
     (matrix-equals-epsilon [a b eps]
       (cond
         (number? b) (eps== a b eps)
-        (== 0 (mp/dimensionality b)) (eps== a (mp/get-0d b) eps)
+        (== 0 (long (mp/dimensionality b))) (eps== a (mp/get-0d b) eps)
         :else false))
   Object
     (matrix-equals-epsilon [a b eps]
@@ -1081,7 +1242,7 @@
 (extend-protocol mp/PFunctionalOperations
   Number
     (element-seq [m]
-      (list m))
+      (vector m))
     (element-map
       ([m f]
         (f m))
@@ -1109,23 +1270,23 @@
             dims (long (mp/dimensionality m))]
         (cond
           (== 0 dims)
-            (list (mp/get-0d m))
+            (vector (mp/get-0d m))
           (and (.isArray c) (.isPrimitive (.getComponentType c)))
-            (seq m)
+            m
           (== 1 dims)
-            (map #(mp/get-1d m %) (range (mp/dimension-count m 0)))
+            (mp/convert-to-nested-vectors m)
           (array? m)
             (mapcat mp/element-seq (mp/get-major-slice-seq m))
           :else (error "Don't know how to create element-seq from: " m))))
     (element-map
       ([m f]
-        (if (== 0 (mp/dimensionality m))
+        (if (== 0 (long (mp/dimensionality m)))
           (f (mp/get-0d m)) ;; handle case of single element
           (let [s (mapv f (mp/element-seq m))]
             (mp/reshape (mp/coerce-param m s)
                         (mp/get-shape m)))))
       ([m f a]
-        (if (== 0 (mp/dimensionality m))
+        (if (== 0 (long (mp/dimensionality m)))
           (let [v (mp/get-0d m)]
             (mp/element-map a #(f v %)))
           (let [[m a] (mp/broadcast-compatible m a)
@@ -1196,13 +1357,13 @@
   Object
     (element-map-indexed
       ([m f]
-        (if (== 0 (mp/dimensionality m))
+        (if (== 0 (long (mp/dimensionality m)))
           (f [] (mp/get-0d m)) ;; handle case of single element
           (let [s (map f (indices-seq m) (mp/element-seq m))]
             (mp/reshape (mp/coerce-param m s)
                         (mp/get-shape m)))))
       ([m f a]
-        (if (== 0 (mp/dimensionality m))
+        (if (== 0 (long (mp/dimensionality m)))
           (let [v (mp/get-0d m)]
             (mp/element-map-indexed a #(f %1 v %2)))
           (let [[m a] (mp/broadcast-compatible m a)
@@ -1249,7 +1410,7 @@
   Object
     (validate-shape [m]
       (cond
-        (== 0 (mp/dimensionality m))
+        (== 0 (long (mp/dimensionality m)))
           (if (mp/is-scalar? m) nil [])
         :else
           (let [ss (mp/get-major-slice-seq m)
@@ -1257,7 +1418,6 @@
             (if (mp/same-shapes? ss)
               (vec (cons (mp/dimension-count m 0) (first shapes)))
               (error "Inconsistent shapes for sub arrays in " (class m)))))))
-
 
 (extend-protocol mp/PMatrixSlices
   Object
@@ -1269,14 +1429,14 @@
       (mp/get-slice m 1 i))
     (get-major-slice [m i]
       (cond
-       (java-array? m) (nth m i)
-       (== 1 (mp/dimensionality m)) (mp/get-1d m i)
+        (java-array? m) (nth m i)
+        (== 1 (long (mp/dimensionality m))) (mp/get-1d m i)
         :else (clojure.core.matrix.impl.wrappers/wrap-slice m i)))
     (get-slice [m dimension i]
-      (cond
-        (neg? dimension) (error "Can't take slice on negative dimension: " dimension)
-        (== 0 dimension) (mp/get-major-slice m i)
-        :else (mp/get-slice (mp/convert-to-nested-vectors m) dimension i))))
+      (let [ldimension (long dimension)]
+        (cond
+          (== 0 ldimension) (mp/get-major-slice m i)
+          :else (mp/get-slice (mp/convert-to-nested-vectors m) dimension i)))))
 
 (extend-protocol mp/PMatrixColumns
   Object
@@ -1308,6 +1468,13 @@
               (clojure.core.matrix.impl.wrappers/wrap-slice m i)))
         :else (clojure.core.matrix.impl.wrappers/wrap-slice m i))))
 
+(extend-protocol mp/PSliceView2
+  Object
+    (get-slice-view [m dim i]
+      (if (zero? dim)
+        (mp/get-major-slice-view m i)
+        (mp/get-slice-view (clojure.core.matrix.impl.wrappers/wrap-nd m) dim i))))
+
 (extend-protocol mp/PSliceSeq
   Object
     (get-major-slice-seq [m]
@@ -1315,16 +1482,17 @@
         (cond
           (<= dims 0) (error "Can't get slices on [" dims "]-dimensional object")
           (.isArray (.getClass m)) (seq m)
-          (== dims 1) (map #(mp/get-1d m %) (range (mp/dimension-count m 0)))
+          (== dims 1) (for [i (range (mp/dimension-count m 0))] (mp/get-1d m i))
           :else (map #(mp/get-major-slice m %) (range (mp/dimension-count m 0)))))))
 
 (extend-protocol mp/PSliceSeq2
   Object
     (get-slice-seq [m dimension]
-      (cond
-        (== dimension 0) (mp/get-major-slice-seq m)
-        (< dimension 0) (error "Can't get slices of a negative dimension: " dimension)
-        :else (map #(mp/get-slice m dimension %) (range (mp/dimension-count m dimension))))))
+      (let [ldimension (long dimension)]
+        (cond
+          (== ldimension 0) (mp/get-major-slice-seq m)
+          (< ldimension 0) (error "Can't get slices of a negative dimension: " dimension)
+          :else (map #(mp/get-slice m dimension %) (range (mp/dimension-count m dimension)))))))
 
 (extend-protocol mp/PSliceViewSeq
   Object
@@ -1342,8 +1510,8 @@
       (error "Can't join an array to a scalar number!"))
   Object
     (join [m a]
-      (let [dims (mp/dimensionality m)
-            adims (mp/dimensionality a)]
+      (let [dims (long (mp/dimensionality m))
+            adims (long (mp/dimensionality a))]
         (cond
           (== dims 0)
             (error "Can't join to a 0-dimensional array!")
@@ -1364,13 +1532,15 @@
   Object
   (join-along [m a dim]
     (mp/coerce-param m
-      (cond
-         (== dim 0)
-           (mp/join m a)
-         :else
-           (mapv #(mp/join-along %1 %2 (dec dim))
-                 (mp/get-major-slice-seq m)
-                 (mp/get-major-slice-seq a))))))
+      (let [dim (long dim)] 
+        (cond
+          (== dim 0)
+            (mp/join m a)
+          :else
+            (let [ddim (dec dim)]  
+              (mapv #(mp/join-along %1 %2 ddim)
+                   (mp/get-major-slice-seq m)
+                   (mp/get-major-slice-seq a))))))))
 
 (extend-protocol mp/PSubVector
   nil
@@ -1486,11 +1656,11 @@
     (row-matrix [m data] (error "Can't create a column matrix from nil"))
   Object
     (column-matrix [m data]
-      (if (== 1 (mp/dimensionality data))
+      (if (== 1 (long (mp/dimensionality data)))
         (mp/coerce-param m (mapv vector (mp/element-seq data)))
         (error "Can't create a column matrix: input must be 1D vector")))
     (row-matrix [m data]
-      (if (== 1 (mp/dimensionality data))
+      (if (== 1 (long (mp/dimensionality data)))
         (mp/coerce-param m (vector data)) ;; i.e. just wrap in a 
         (error "Can't create a row matrix: input must be 1D vector"))))
 
@@ -1585,9 +1755,83 @@
 
 (extend-protocol mp/PSquare
   Number
-   (square [m] (* m m))
+   (square [m] (* m m)) ;; can't eliminate boxing warning, may be any numerical type
   Object
    (square [m] (mp/element-multiply m m)))
+
+(defn- logistic-fn
+  "Logistic function, with primitive type hints"
+  (^double [^double t]
+    (let [e-t (Math/exp (- t))]
+      (/ 1.0 (+ 1.0 e-t)))))
+
+(extend-protocol mp/PLogistic
+  Number
+    (logistic [m]
+      (let [e-t (Math/exp (- (double m)))]
+        (/ 1.0 (+ 1.0 e-t))))
+  Object
+    (logistic [m]
+      (mp/element-map m logistic-fn)))
+
+(extend-protocol mp/PLogisticMutable
+  Object
+    (logistic! [m]
+      (mp/element-map! m logistic-fn)))
+
+(defn- softplus-fn
+  "Softplus function, with primitive type hints"
+  (^double [^double t]
+    (if (> t 100.0) ;; catch the case of overflow to infinity for large inputs
+      t
+      (let [et (Math/exp t)]
+        (Math/log (+ 1.0 et))))))
+
+(extend-protocol mp/PSoftplus
+  Number
+    (softplus [m]
+      (let [et (Math/exp (double m))]
+        (Math/log (+ 1.0 et))))
+  Object
+    (softplus [m]
+      (mp/element-map m softplus-fn)))
+
+(extend-protocol mp/PSoftmax
+  Object
+    (softmax [m]
+      (let [em (mp/exp m)]
+        (mp/element-divide em (mp/element-sum em)))))
+
+(extend-protocol mp/PSoftmaxMutable
+  Object
+    (softmax! [m]
+      (mp/exp! m)
+      (mp/element-divide! m (mp/element-sum m))
+      m))
+
+(extend-protocol mp/PSoftplusMutable
+  Object
+    (softplus! [m]
+      (mp/element-map! m softplus-fn)))
+
+(defn- relu-fn
+  "ReLU function, with primitive type hints"
+  (^double [^double t]
+    (Math/max 0.0 t)))
+
+(extend-protocol mp/PReLU
+  Number
+    (relu [m]
+      (Math/max 0.0 (double m)))
+  Object
+    (relu [m]
+      (mp/element-map m relu-fn)))
+
+(extend-protocol mp/PReLUMutable
+  Object
+    (relu! [m]
+      (mp/element-map! m relu-fn)))
+
 
 ;; define standard Java maths functions for numbers
 (eval
@@ -1651,9 +1895,9 @@
       (let [aux (fn aux [acc blocks]
                   (if (empty? blocks)
                       acc
-                      (let [acc-dim (mp/dimension-count acc 0)
+                      (let [acc-dim (long (mp/dimension-count acc 0))
                             new-block (blocks 0)
-                            new-block-dim (mp/dimension-count new-block 0)
+                            new-block-dim (long (mp/dimension-count new-block 0))
                             new-dim (+ acc-dim new-block-dim)
                             dm (vec (for [i (range new-dim)]
                                          (if (< i acc-dim)
@@ -1666,11 +1910,12 @@
 
 ;; Helper function for symmetric? predicate in PMatrixPredicates.
 ;; Note loop/recur instead of letfn/recur is 20-25% slower.
+;; not possible to eliminate boxing warnings - needs to handle any numeric type
 (defn- symmetric-matrix-entries?
   "Returns true iff square matrix m is symmetric."
   [m]
-  (let [dim (first (mp/get-shape m))]
-    (letfn [(f [i j]
+  (let [dim (long (first (mp/get-shape m)))]
+    (letfn [(f [^long i ^long j]
               (cond
                 (>= i dim) true                         ; all entries match: symmetric
                 (>= j dim) (recur (+ 1 i) (+ 2 i))      ; all j's OK: restart with new i
@@ -1684,17 +1929,17 @@
   (identity-matrix? [m]
     (let [rc (long (mp/dimension-count m 0))
           cc (long (mp/dimension-count m 1))]
-      (if (and (== (mp/dimensionality m) 2) (== rc cc))
+      (if (and (== (long (mp/dimensionality m)) 2) (== rc cc))
         (loop [i (long 0)]
           (if (< i rc)
             (if (loop [j (long 0)]
                   (if (< j cc)
                     (let [elem (mp/get-2d m i j)]
-                      (if (nil? elem)
-                        false
+                      (if (number? elem)
                         (if (== i j)
-                          (if (== elem 1) (recur (inc j)) false)
-                          (if (== elem 0) (recur (inc j)) false))))
+                          (if (== (double elem) 1.0) (recur (inc j)) false)
+                          (if (zero? elem) (recur (inc j)) false))
+                        false))
                     true))
               (recur (inc i))
               false)
@@ -1742,7 +1987,7 @@
     [m]
     (if (mp/is-vector? m)
       (vec (for [i (range (mp/dimension-count m 0))
-                    :when (not (== 0 (mp/get-1d m i)))]
+                    :when (not (zero? (mp/get-1d m i)))]
               i))
       (vec (for [i (range (mp/dimension-count m 0))]
               (mp/non-zero-indices (mp/get-major-slice m i)))))))
@@ -1751,16 +1996,16 @@
 (extend-protocol mp/PMatrixTypes
   Object
   (diagonal? [m]
-    (if (= (mp/dimensionality m) 2)
-      (let [[mrows mcols] (mp/get-shape m)]
+    (if (= (long (mp/dimensionality m)) 2)
+      (let [[^long mrows ^long mcols] (mp/get-shape m)]
         (->> (mp/element-seq m)
-             (map #(vector (quot %1 mcols) (rem %1 mcols) %2)
+             (map (fn [^long i elem] (vector (quot i mcols) (rem i mcols) elem))
                   (range (* mrows mcols)))
-             (every? (fn [[i j v]]
+             (every? (fn [[^long i ^long j v]]
                        (cond
-                        (= i j) true
-                        (and (not= i j) (== v 0)) true
-                        :else false)))))
+                         (= i j) true
+                         (and (not= i j) (== v 0)) true
+                         :else false)))))
       false))
   (upper-triangular? [m]
     (if (square? m)
@@ -1773,7 +2018,7 @@
     (if (square? m)
       (->> (mp/get-slice-seq m 0)
            (map vector (range))
-           (mapcat (fn [[idx xs]] (drop (inc idx) xs)))
+           (mapcat (fn [[^long idx xs]] (drop (inc idx) xs)))
            (every? zero?))
       false))
   (positive-definite? [m]
@@ -1789,38 +2034,58 @@
            eps))))
 
 (extend-protocol mp/PSelect
+  nil
+    (select [a area]
+      (when (seq area) (error "Trying to select on nil with selection: " area))
+      nil)
+  Number
+    (select [a area]
+      (when (seq area) (error "Trying to select on numerical scalar with selection: " area))
+      a)
   Object
+    (select [a area]
+      (or 
+        (mp/select-view a area) ;; use a view if supported by the implementation
+        (wrap/wrap-selection a area))))
+
+(extend-protocol mp/PSelectView
+  nil
+    (select-view [a area]
+      (when (seq area) (error "Trying to select on nil with selection: " area))
+      nil)  Object
+  Number
+    (select-view [a area]
+      (when (seq area) (error "Trying to select on numerical scalar with selection: " area))
+      a)
+  Object  
+    (select-view [a area]
+      (wrap/wrap-selection a area)))
+
+(extend-protocol mp/PSelect
+  Number
   (select [a area]
-    (wrap/wrap-selection a area)))
+    (if (empty? area)
+      a
+      (error "Non empty area argument in select, called on Number " a))))
 
 (defn- area-indices [area]
   (reduce (fn [io in]
             (for [a in b io]
-              (cons a b))) (map vector (last area)) (rest (reverse area))))
+              (cons a b))) (mapv vector (last area)) (rest (reverse area))))
 
 (defn- indices [vals]
-  (area-indices (map range (mp/get-shape vals))))
+  (area-indices (mapv range (mp/get-shape vals))))
 
 
 (extend-protocol mp/PSetSelection
   Object
-  (set-selection [a area vals]
-    (let [shape (map count area)
-        vals (mp/broadcast vals shape)]
-    (cond
-     (and (= (count shape) 2)
-          (= (first shape) (mp/dimension-count a 0)))
-     (loop [a a [i & is] (second area) [j & js] (range (second shape))]
-       (if i (recur (mp/set-column a i (mp/get-column vals j)) is js) a))
-     (and (= (count shape) 2)
-          (= (second shape) (mp/dimension-count a 1)))
-     (loop [a a [i & is] (first area) [j & js] (range (first shape))]
-       (if i (recur (mp/set-row a i (mp/get-row vals j)) is js) a))
-     :else
-     (loop [a a [idl & idxl] (area-indices area) [idr & idxr] (indices vals)]
-       (if idl
-         (recur (mp/set-nd a idl (mp/get-nd vals idr)) idxl idxr)
-         a))))))
+  (set-selection [m area vals]
+    (let [;; create a mutable clone
+          mm (or (mp/mutable-matrix m)
+                (construct-mutable-matrix m))
+          v (mp/select-view m area)]
+      (mp/assign! v vals)
+      mm)))
 
 (extend-protocol mp/PIndexImplementation
   Object
@@ -1840,10 +2105,11 @@
 (extend-protocol mp/PDimensionImplementation
   Object
     (dimension-name [ds idx dim]
-      (cond
-        (== dim 0) (mp/row-name ds idx)
-        (== dim 1) (mp/column-name ds idx)
-        :else idx))
+      (let [dim (long dim)]
+        (cond
+          (== dim 0) (mp/row-name ds idx)
+          (== dim 1) (mp/column-name ds idx)
+          :else idx)))
     (row-name [ds idx]
       idx)
     (column-name [ds idx]
@@ -1879,7 +2145,10 @@
 
 (defn compute-q [m ^doubles qr-data mcols mrows min-len
                  ^doubles us ^doubles vs ^doubles gammas]
-  (let [q ^doubles (mp/to-double-array (mp/identity-matrix vector mrows))]
+  (let [q ^doubles (mp/to-double-array (mp/identity-matrix vector mrows))
+        mcols (long mcols)
+        mrows (long mrows)
+        min-len (long min-len)]
     (c-for [i (dec min-len) (> i -1) (dec i)]
       (let [gamma (aget gammas i)]
         (aset us i 1.0)
@@ -1914,64 +2183,75 @@
                 (aset q qr-idx (- (aget q qr-idx)
                                   (* u (aget vs k))))))))))
     (mp/compute-matrix m [mrows mrows]
-                       (fn [i j]
+                       (fn [^long i ^long j]
                          (aget q (+ (* i mrows) j))))))
 
-
-
 (defn compute-r [m ^doubles data mcols mrows min-len compact?]
-  (let [cm (mp/compute-matrix
+  (let [mrows (long mrows)
+        mcols (long mcols)
+        min-len (long min-len)
+        cm (mp/compute-matrix
               m [mrows mcols]
-              (fn [i j]
+              (fn [^long i ^long j]
                 (if (and (< i min-len)
                          (>= j i)
                          (< j mcols))
                   (aget data (+ (* i mcols) j))
                   0)))]
     (if compact?
-      (->> (mp/get-major-slice-seq cm)
-           (reduce
-            #(if (every? zero? %2) (inc %1) %1) 0)
-           (#(mp/reshape cm [mcols (- mrows %)])))
+      (let [slcs (mp/get-major-slice-seq cm)
+            non-zero-rows (long (reduce 
+                            (fn [^long cnt slice] (if (every? zero? slice) (inc cnt) cnt)) 
+                            0 
+                            slcs))]
+        ;; TODO: is this broken? Looks like mcols and mrows in wrong order?
+        (mp/reshape cm [mcols (- mrows non-zero-rows)]))
       cm)))
 
 (defn householder-qr [^doubles qr-data idx mcols
                       mrows ^doubles us ^doubles gammas]
-  (loop [qr-idx (+ idx (* idx mcols))
-         i idx]
-    (when (< i mrows)
-      (aset us i (aget qr-data qr-idx))
-      (recur (+ qr-idx mcols)
-             (inc i))))
-  (let [max_ (apply max (map #(Math/abs ^Double %)
-                             (mp/subvector us idx (- mrows idx))))]
-    (if (= max_ 0.0)
-      {:error true}
-      (let [_ (c-for [i idx (< i mrows) (inc i)]
-                (aset us i (/ (aget us i) max_)))
-            tau (->> (mp/subvector us idx (- mrows idx))
-                     (map #(* % %))
-                     (apply +)
-                     (Math/sqrt))
-            u-idx (aget us idx)
-            tau (if (neg? u-idx) (- tau) tau)
-            u-0 (+ u-idx tau)
-            gamma (/ u-0 tau)
-            tau (* tau max_)]
-        (aset gammas idx gamma)
-        (c-for [i (inc idx) (< i mrows) (inc i)]
-          (aset us i (/ (aget us i) u-0)))
-        (aset us idx 1.0)
-        {:gamma gamma
-         :gammas gammas
-         :us us
-         :tau tau
-         :error false}))))
+  (let [idx (long idx)
+        mcols (long mcols)
+        mrows (long mrows)]
+    (loop [qr-idx (long (+ idx (* idx mcols)))
+           i (long idx)]
+      (when (< i mrows)
+        (aset us i (aget qr-data qr-idx))
+        (recur (+ qr-idx mcols)
+               (inc i))))
+    (let [max_ (double (apply max (map #(Math/abs (double %))
+                         (mp/subvector us idx (- mrows idx)))))]
+      (if (= max_ 0.0)
+        {:error true}
+        (let [_ (c-for [i idx (< i mrows) (inc i)]
+                  (aset us i (/ (aget us i) max_)))
+              tau (->> (mp/subvector us idx (- mrows idx))
+                       (reduce (fn [^double acc ^double x] (+ acc (* x x))) 0.0)
+                       (Math/sqrt))
+              u-idx (aget us idx)
+              tau (if (neg? u-idx) (- tau) tau)
+              u-0 (+ u-idx tau)
+              gamma (/ u-0 tau)
+              tau (* tau max_)]
+          (aset gammas idx gamma)
+          (c-for [i (inc idx) (< i mrows) (inc i)]
+            (aset us i (/ (aget us i) u-0)))
+          (aset us idx 1.0)
+          {:gamma gamma
+           :gammas gammas
+           :us us
+           :tau tau
+           :error false})))))
 
 (defn update-qr [^doubles qr-data idx mcols mrows ^doubles vs
                  ^doubles us ^Double gamma ^Double tau]
-  (let [u (aget us idx)
-        idx+1 (inc idx)]
+  (let [idx (long idx)
+        mrows (long mrows)
+        mcols (long mcols)
+        u (aget us idx)
+        idx+1 (inc idx)
+        gamma (double gamma)
+        tau (double tau)]
     (c-for [i idx+1 (< i mcols) (inc i)]
       (aset vs i (aget qr-data
                        (+ i
@@ -2013,6 +2293,8 @@
   Object
   (qr [m options]
     (let [[mrows mcols] (mp/get-shape m)
+          mrows (long mrows)
+          mcols (long mcols)
           min-len (min mcols mrows)
           max-len (max mcols mrows)]
       (loop [qr-data (mp/to-double-array m)
@@ -2083,9 +2365,3 @@
   Object
   (least-squares [a b]
     (try-current-implementation a (mp/least-squares a b))))
-
-;; =======================================================
-;; default multimethod implementations
-
-(defmethod mm/mul :default [x y]
-  (mp/inner-product x y))

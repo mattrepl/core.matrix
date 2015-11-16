@@ -4,11 +4,9 @@
             [clojure.core.matrix.linear :as li]
             [clojure.core.matrix.operators :as op]
             [clojure.core.matrix.implementations :as imp]
-            clojure.core.matrix.examples
-            clojure.core.matrix.impl.persistent-vector
+            clojure.core.matrix.demo.examples
             [clojure.core.matrix :refer :all]
             [clojure.core.matrix.utils :refer [error? broadcast-shape]]
-            [clojure.core.matrix.select :refer :all]
             [clojure.test :refer :all])
   (:import [java.io StringWriter]))
 
@@ -36,7 +34,8 @@
       (is (equals 1 (select a 0 0)))
       (is (equals [[1] [3]] (select a [0 1] [0])))
       (is (equals [1 3] (select a :all 0)))
-      (is (equals a (select a :all :all))))))
+      (is (equals a (select a :all :all)))
+      (is (equals [3] (select a [1] 0))))))
 
 (deftest test-select-indices
   (let [a [[1 2] [3 4]]]
@@ -47,19 +46,8 @@
       (is (equals [[0 0] [0 0]] (set-indices a [[0 0] [0 1] [1 0] [1 1]] 0)))
       (let [ma (mutable a)]
         (set-indices! ma [[0 0] [1 1]] [5 6])
-        (is (equals ma [[5 2] [3 6]]))))))
-
-
-(deftest test-sel
-  (let [a [[1 2] [3 4]]]
-    (testing "higher level indexing"
-      (is (equals 1 (sel a 0 0)))
-      (is (equals [[1] [3]] (sel a [0 1] [0])))
-      (is (equals [1 3] (sel a [0 1] 0)))
-      (is (equals a (sel a :all :all)))
-      (is (equals 4 (sel a end end)))
-      (is (equals 2 (sel a (exclude 1) (exclude 0))))
-      (is (equals [1 2] (sel [[-1 0] [1 2]] (where pos?)))))))
+        (is (equals ma [[5 2] [3 6]]))
+        (is (equals (transpose ma) [[5 3] [2 6]]))))))
 
 (deftest test-set-selection
   (let [a [[1 2 3 4] [5 6 7 8] [9 10 11 12]]]
@@ -74,34 +62,6 @@
       (is (equals [[2 2 3 4] [5 6 7 8] [9 10 11 12]] a))
       (set-selection! a :all 0 0)
       (is (equals [[0 2 3 4] [0 6 7 8] [0 10 11 12]] a)))))
-
-
-(deftest test-set-sel
-  (let [a [[1 2 3 4] [5 6 7 8] [9 10 11 12]]]
-    (testing "set-sel"
-      (is (= [[2 2 3 4] [5 6 7 8] [9 10 11 12]] (set-sel a 0 0 2)))
-      (is (= [[3 2 3 3] [5 6 7 8] [3 10 11 3]] (set-sel a [0 2] [0 3] 3)))
-      (is (= [[1 2 3 4] [5 5 5 5] [5 5 5 5]]
-             (set-sel a (where (partial < 5)) 5))))))
-
-(deftest test-set-sel!
-  (let [a (matrix :ndarray [[1 2 3 4] [5 6 7 8] [9 10 11 12]])]
-    (testing "set-sel!"
-      (set-sel! a 0 0 2)
-      (is (= [[2 2 3 4] [5 6 7 8] [9 10 11 12]] a))
-      (set-sel! a :all 0 0)
-      (is (= [[0 2 3 4] [0 6 7 8] [0 10 11 12]] a)))))
-
-(deftest test-selector-functions
-  (let [a [[1 2 3 4] [5 6 7 8] [9 10 11 12] [13 14 15 16]]]
-    (is (equals (eseq a) (sel a (where pos?))))
-    (is (equals [16] (sel a end)))
-    (is (equals [15] (sel a (calc - end 1))))
-    (is (equals a (sel a (irange) (irange))))
-    (is (equals [[5 6 7 8] [9 10 11 12]] (sel a (irange 1 2) :all)))
-    (is (equals [2 3 4] (sel a (exclude [1 2 3]) (exclude 0))))
-    (is (equals [[1 3] [9 11]] (sel a even even)))
-    (is (equals [[6 8] [14 16]] (sel a odd odd)))))
 
 (deftest test-shape
   (testing "basic array shapes"
@@ -184,9 +144,8 @@
     (is (= [[1 2] [3 4]] (coerce [1] [[1 2] [3 4]])))
     (is (= [[1 2] [3 4]] (coerce [1] '((1 2) (3 4))))))
   (testing "coerce to a number"
-     ;; (is (= 1 (coerce 2 1))) ;; TODO: what should happen here?
-    )
-  )
+     (is (= 1 (coerce 2 1)))
+     (is (equals [1 2] (coerce 2 [1 2])))))
 
 (deftest test-pow
   (let [a (array :persistent-vector [1 2 3])
@@ -354,6 +313,16 @@
   (is (== 8 (pow 2 3)))
   (is (equals [0.5 2] (pow [2 0.5] -1))))
 
+(deftest test-logistic
+  (is (== 0.0 (logistic -10000)))
+  (is (== 0.5 (logistic 0)))
+  (is (== 1.0 (logistic 10000)))
+  (is (equals [0 0.5 1] (logistic [-10000 0 10000])))
+  (let [da (double-array [-10000 0 10000])]
+    (logistic! da)
+    (is (equals [0 0.5 1] da)))
+  (is (error? (logistic! 0.7))))
+
 (deftest test-addition
   (testing "matrix addition"
     (is (= [5.0] (add [3.0] [2.0])))
@@ -387,9 +356,8 @@
 
 (deftest test-det
   (testing "determinant"
-    ;; (is (== 3 (det 3))) ;; TODO fix for Number
-    ;; (is (== -1 (det [[0 1] [1 0]]))) ;; TODO standard implementation
-    ))
+    (is (== 3 (det [[3]])))
+    (is (== -1 (det [[0 1] [1 0]])))))
 
 (deftest test-join
   (is (= [1 2 3] (join [1 2] 3)))
@@ -407,11 +375,9 @@
   (is (e== [1 4] (diagonal [[1 2] [3 4]]))))
 
 (deftest test-diagonals
-  ;; TODO: enable once diagonal function is complete
-  ;; (is (e== [1 4] (diagonal [[1 2] [3 4]] 0)))
-  ;; (is (e== [2] (diagonal [[1 2] [3 4]] 1)))
-  ;; (is (e== [3] (diagonal [[1 2] [3 4]] -1)))
-  )
+  (is (e== [1 4] (diagonal [[1 2] [3 4]] 0)))
+  (is (e== [2] (diagonal [[1 2] [3 4]] 1)))
+  (is (e== [3] (diagonal [[1 2] [3 4]] -1))))
 
 (deftest test-diagonal
   (is (= [1 4] (diagonal [[1 2] [3 4] [5 6]]   )))
@@ -420,6 +386,25 @@
   (is (= [2]   (diagonal [[1 2] [3 4] [5 6]]  1)))
   (is (= [3 6] (diagonal [[1 2] [3 4] [5 6]] -1)))
   (is (= [5]   (diagonal [[1 2] [3 4] [5 6]] -2))))
+
+(deftest test-softplus
+  (is (equals [0.0 (log 2) 1000.0] (softplus [-1000.0 0.0 1000.0])))
+  (let [da (double-array [-1000 0 1000])]
+    (softplus! da)
+    (is (equals [0.0 (log 2) 1000.0] da))))
+
+(deftest test-relu
+  (is (equals [0.0 0.0 0.5 1000.0] (relu [-1000.0 0.0 0.5 1000.0])))
+  (let [da (double-array [-1000 0 1000])]
+    (relu! da)
+    (is (equals [0.0 0.0 1000.0] da))))
+
+(deftest test-softmax
+  (is (equals [0.5 0.5] (softmax [10 10])))
+  (is (equals [0.0 1.0] (softmax [-100 100]) 0.000001))
+  (let [da (double-array [-10 -10])]
+    (softmax! da)
+    (is (equals [0.5 0.5] da))))
 
 (deftest test-normalise
   (testing "vector normalise"
@@ -534,7 +519,7 @@
 (deftest check-examples
   (binding [*out* (StringWriter.)]
     (testing "example code"
-      (clojure.core.matrix.examples/all-examples))))
+      (clojure.core.matrix.demo.examples/all-examples))))
 
 (deftest test-zeros
   (is (zero-matrix? (zero-matrix 3 3)))
@@ -562,7 +547,8 @@
 (deftest test-min-max
   (is (== 1 (emin [2 1 7])))
   (is (== 7 (emax [2 1 7])))
-  (is (== 7 (emax [[4 3 2] [2 1 7] [-1 5 -20]]))))
+  (is (== 7 (emax [[4 3 2] [2 1 7] [-1 5 -20]])))
+  (is (equals [[2 5 2] [4 8 2] [5 6 3]] (clamp [[1 5 1] [4 10 2] [5 6 3]] 2 8))))
 
 (deftest test-predicates
   (testing "scalar predicates"

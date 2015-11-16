@@ -1,4 +1,5 @@
 (ns clojure.core.matrix.utils
+  "Namespace for core.matrix utilities. Intended mainly for library and tool writers."
   (:refer-clojure :exclude [update])
   (:require [clojure.reflect :as r])
   (:import [java.util Arrays]))
@@ -57,12 +58,15 @@
   ([sa sb]
     (cond
       (identical? sa sb) true
-      (= sa sb) true
       (not= (count sa) (count sb)) false
-      (let [sa (seq sa)
-            sb (seq sb)]
-        (every? true? (map == sa sb))) true
-      :else false)))
+      :else 
+        (let [ca (count sa)]
+          (loop [i 0]
+            (if (>= i ca)
+              true
+              (if (== (nth sa i) (nth sb i))
+                (recur (inc i))
+                false)))))))
 
 (defn xor
   "Returns the logical xor of a set of values, considered as booleans"
@@ -201,6 +205,11 @@
           r (broadcast-shape* a b)]
       (if r (reverse r) nil))))
 
+(defn can-broadcast
+  "Returns truthy if the first shape a can be broadcast to the shape b"
+  ([from-shape to-shape]
+    (TODO)))
+
 (defmacro c-for
   "C-like loop with nested loops support"
   [loops & body]
@@ -253,7 +262,7 @@
     (extends? proto cls)
     (let [bases (-> cls (r/type-reflect :ancestors true) :ancestors)]
       (->> bases
-           (filter (complement #{'Object}))
+           (filter (complement #{'Object 'java.lang.Object}))
            (map resolve)
            (cons cls)
            (map (partial extends? proto))

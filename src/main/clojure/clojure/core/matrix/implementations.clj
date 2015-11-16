@@ -1,4 +1,6 @@
 (ns clojure.core.matrix.implementations
+  "Namespace for management of core.matrix implementations. Users should avoid using these
+   functions directly as they are intended for library and tool writers."
   (:require [clojure.core.matrix.protocols :as mp]
             [clojure.core.matrix.utils :refer [error]]))
 
@@ -7,9 +9,11 @@
 ;;
 ;; Tools to support the registration / manangement of clojure.core.matrix implementations
 
-;; map of known implementation tags to namespace imports
-;; we use this to attempt to load an implementation
 (def KNOWN-IMPLEMENTATIONS
+  "A map of known core.matrix implementation namespaces. 
+
+   core.matrix will attempt to load these namespaces when an array of the specified 
+   keyword type is requested."
   (array-map
    :vectorz 'mikera.vectorz.matrix-api
    :clojure 'clojure.core.matrix.impl.clojure
@@ -33,18 +37,33 @@
    :commons-math 'apache-commons-matrix.core
    :mtj 'cav.mtj.core.matrix))
 
-;; default implementation to use
-;; should be included with clojure.core.matrix for easy of use
-(def DEFAULT-IMPLEMENTATION :persistent-vector)
+(def DEFAULT-IMPLEMENTATION 
+  "The default implementation used in core.matrix. Currently set to `:persistent-vector` for maximum 
+   compatibility with regular Clojure code."
+  :persistent-vector)
 
-;; current implementation in use
-(def ^:dynamic *matrix-implementation* DEFAULT-IMPLEMENTATION)
 
-(def ^:dynamic *debug-options* {:print-registrations false})
+(def ^:dynamic *matrix-implementation* 
+  "A dynamic var specifying the current core.matrix implementation in use. 
 
-;; hashmap of implementation keys to canonical objects
-;; objects must implement PImplementation protocol at a minimum
-(defonce canonical-objects (atom {}))
+   May be re-bound to temporarily use a different core.matrix implementation." 
+  DEFAULT-IMPLEMENTATION)
+
+(def ^:dynamic *debug-options* 
+  "A dynamic var supporting debugging option for core.matrix implementers.
+
+   Currently supported values:
+     :print-registrations  - print when core.matrix implementations are registered" 
+  {:print-registrations false})
+
+(defonce 
+  ^{:doc "An atom holding a map of canonical objects for each loaded core.matrix implementation.
+
+   Canonical objects may be used to invoke protocol methods on an instance of the correct
+   type to get implementation-specific behaviour. Canonical objects are required to support
+   all mandatory core.matrix protocols."}
+  canonical-objects 
+   (atom {}))
 
 (defn get-implementation-key
   "Returns the implementation keyword  for a given object"
@@ -123,6 +142,7 @@
 
    Parameter may be 
     - A known keyword for the implementation e.g. :vectorz
+    - An existing instance from the implementation
 
    This is used primarily for functions that construct new matrices, i.e. it determines the
    implementation used for expressions like: (matrix [[1 2] [3 4]])"

@@ -1,4 +1,8 @@
 (ns clojure.core.matrix.impl.sequence
+  "Namepace implementing selected core.matrix protocols for clojure sequences.
+
+   WARNING: baecause they lack efficient indexed access, sequences are not efficient for many
+   array operations. In general they should be converted to other implementations before use."
   (:require [clojure.core.matrix.protocols :as mp]
             [clojure.core.matrix.implementations :as imp]
             [clojure.core.matrix.utils :refer [scalar-coerce error]])
@@ -73,14 +77,35 @@
 
 (extend-protocol mp/PSliceSeq
   ISeq
-    (get-major-slice-seq [m] m))
+    (get-major-slice-seq [m] (vec m)))
+
+(extend-protocol mp/PMatrixRows
+  ISeq
+    (get-rows [m] 
+      (vec m)))
+
+(extend-protocol mp/PMatrixColumns
+  ISeq
+    (get-columns [m] 
+      ;; should be OK since :sequence should never the the current implementation
+      (let [m (mp/coerce-param imp/*matrix-implementation* m)]
+        (mp/get-columns m))))
+
+(extend-protocol mp/PSliceSeq2
+  ISeq
+    (get-slice-seq [m dimension]
+      (let [ldimension (long dimension)]
+        (cond
+         (== ldimension 0) (mp/get-major-slice-seq m)
+         (< ldimension 0) (error "Can't get slices of a negative dimension: " dimension)
+         :else (mapv #(mp/get-slice m dimension %) (range (mp/dimension-count m dimension)))))))
 
 (extend-protocol mp/PConversion
   ISeq
     (convert-to-nested-vectors [m]
       (if (> (mp/dimensionality (first m)) 0)
         (mapv mp/convert-to-nested-vectors m)
-        (mapv mp/get-0d m))))
+        (vec m))))
 
 (extend-protocol mp/PDimensionInfo
   ISeq
@@ -100,7 +125,9 @@
 (extend-protocol mp/PFunctionalOperations
   ISeq
     (element-seq [m]
-      (mapcat mp/element-seq m))
+      (if (== 0 (long (mp/dimensionality (first m))))
+        m ;; handle 1D case, just return this sequence unchanged
+        (mapcat mp/element-seq m)))
     (element-map
       ([m f]
         (mapv #(mp/element-map % f) m))
@@ -152,4 +179,4 @@
 ;; =====================================
 ;; Register implementation
 
-(imp/register-implementation '())
+(imp/register-implementation '(1 2 3))

@@ -1724,7 +1724,9 @@
         (if-let [shape (seq shape)]
           (let [fs (long (first shape))
                 parts (partition-shape es shape)]
-            (mp/construct-matrix m (take fs parts)))
+            (or 
+              (mp/construct-matrix m (take fs parts))
+              (mp/construct-matrix [] (take fs parts))))
           (first es)))))
 
 (extend-protocol mp/PCoercion
@@ -1964,8 +1966,10 @@
 (extend-protocol mp/PIndicesAccess
   Object
   (get-indices [a indices]
-    (mp/construct-matrix (if (array? a) a [])
-                         (map #(mp/get-nd a %1) (map mp/element-seq indices)))))
+    (let [vals (map #(mp/get-nd a %1) (map mp/element-seq indices))] ;; TODO: use index coerce?
+      (or 
+        (when (array? a) (mp/construct-matrix a vals))
+        (mp/construct-matrix [] vals)))))
 
 (extend-protocol mp/PIndicesSetting
   Object
@@ -2102,19 +2106,6 @@
 	  (index-coerce [m a]
       (mp/index-to-longs m)))
 
-(extend-protocol mp/PDimensionImplementation
-  Object
-    (dimension-name [ds idx dim]
-      (let [dim (long dim)]
-        (cond
-          (== dim 0) (mp/row-name ds idx)
-          (== dim 1) (mp/column-name ds idx)
-          :else idx)))
-    (row-name [ds idx]
-      idx)
-    (column-name [ds idx]
-      (nth (mp/column-names ds) idx)))
-
 ;; =======================================================
 ;; default label implementation
 
@@ -2128,6 +2119,15 @@
       (if (<= 0 (long dim) (dec (long (mp/dimensionality m)))) 
         nil
         (error "Dimension out of range: " dim)))) 
+
+(extend-protocol mp/PColumnNames
+  Object
+    (column-name [m i]
+      (let [dim (dec (long (mp/dimensionality m)))] 
+        (mp/label m dim i)))
+    (column-names [m]
+      (let [dim (dec (long (mp/dimensionality m)))] 
+        (mp/labels m dim)))) 
 
 
 ;; =======================================================

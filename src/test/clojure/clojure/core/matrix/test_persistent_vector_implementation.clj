@@ -5,7 +5,7 @@
             clojure.core.matrix.impl.persistent-vector
             [clojure.core.matrix.compliance-tester :as compliance]
             [clojure.core.matrix :refer :all]
-            [clojure.core.matrix.utils :refer [error?]]
+            [clojure.core.matrix.macros-clj :refer [error?]]
             [clojure.core.matrix.protocols :as mp]
             [clojure.test :refer :all]))
 
@@ -35,7 +35,25 @@
     (is (nil? (coerce [] nil))))
   (testing "broadcast on emap"
     (is (equals [[6 7] [8 9]] (emap + [[1 2] [3 4]] 5)))
-    (is (equals [[6 7] [8 9]] (emap + 5 [[1 2] [3 4]])))))
+    (is (equals [[6 7] [8 9]] (emap + 5 [[1 2] [3 4]]))))
+  (testing "Inner product incompatible shapes"
+    (is (error? (inner-product [1 2] [[3 4]])))))
+
+(deftest test-double-coercion-302 ;; fix for #302
+  (testing "coercion to double array") 
+    (is (equals [17.0] (to-double-array [(double-array [17])]))))
+
+(deftest vectorz-round-trip ;; regression test for vectorz-clj #61
+  (let [m (matrix :vectorz [[1 2 3][4 5 6]])
+        rs (rows m)
+        m2 (matrix :vectorz (vec rs))]
+    (is (equals m m2))))
+
+(deftest ndarray-round-trip ;; regression test for object arrays
+  (let [m (matrix :ndarray [[1 2 3][4 :foo 6]])
+        rs (rows m)
+        m2 (matrix :ndarray (vec rs))]
+    (is (e= m m2))))
 
 (deftest test-assign
   (is (= [[1 2] [1 2]] (assign [[1 2] [3 4]] [1 2])))
@@ -90,7 +108,7 @@
 (deftest test-incompatible
   (is (error? (add [1 2] [3 4 5])))
   (is (error? (sub [[1] [2]] [[3] [4] [5]])))
-  (is (error? (emul [[1] [2]] [[3] [4] [5]]))))
+  (is (error? (mul [[1] [2]] [[3] [4] [5]]))))
 
 (deftest test-functional-op
   (testing "map"
@@ -133,7 +151,12 @@
       (is (not (mutable? m))) ;; persistent vector should not be mutable, even if components are
       (is (== 2 (dimensionality m)))
       (is (equals [3 7] (mmul m [1 1])))
-      (is (equals [2 4] (get-column m 1))))))
+      (is (equals [2 4] (get-column m 1)))))
+  (testing "nested implementations"
+    (is (equals [(double-array [17])] (array :vectorz [(double-array [17])]) ))))
+
+(deftest test-filter-slices
+  (is (equals [[1 2] [3 4]] (filter-slices numerical? [[1 2] [2 nil] [3 4]]))))
 
 (deftest test-emap
   (testing "basic"
@@ -179,7 +202,9 @@
   (testing "double arrays"
     (is (= [1.0 2.0] (coerce [] (double-array [1 2])))))
   (testing "nested sequences"
-    (is (= [[1 2] [3 4]] (coerce [] '((1 2) (3 4)))))))
+    (is (= [[1 2] [3 4]] (coerce [] '((1 2) (3 4))))))
+  (testing "canonical translation to vectors"
+    (is (= [[17.0]] (coerce [] [(double-array [17])])))))
 
 (deftest test-row-operations
     (testing "vector row swap"
@@ -192,6 +217,15 @@
       (is (= (matrix [[0 2 4]]) (multiply-row (matrix [[0 1 2]]) 0 2))))
     (testing "add row j to i and replace i with the result"
       (is (= (matrix [[3 3] [1 1]]) (add-row (matrix [[1 1] [1 1]]) 0 1 2)))))
+
+(deftest test-magnitude
+  (is (== 0 (magnitude [0.0])))
+  (is (== 1 (magnitude [1])))
+  (is (== 1 (magnitude [-1])))
+  (is (== 4 (magnitude-squared [0 2])))
+  (is (== 4 (magnitude-squared [-2 0])))
+  (is (== 5 (magnitude [[0 3] [4 0]])))
+  (is (== 25 (magnitude-squared [[3 0] [0 4]]))))
 
 (deftest test-native
   (is (nil? (native [1 2 3])))
@@ -217,7 +251,7 @@
 (deftest test-clamp
   (is (error? (clamp [[1 2] [3 4]] 6 1))))
 
-;; run complicance tests
+;; run compliance tests
 
 (deftest instance-tests
   (testing "empty persistent vectors are supported"

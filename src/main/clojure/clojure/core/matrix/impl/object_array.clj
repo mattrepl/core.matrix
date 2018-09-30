@@ -1,16 +1,19 @@
 (ns clojure.core.matrix.impl.object-array
-  "Namespace for core.matrix implementation using nested Java object arrays. 
+  "Namespace for core.matrix implementation using nested Java object arrays.
+
+   This implementation is useful if you want fast mutable arrays of arbitrary objects.
 
    Array format is defined as:
    - Top level object is a Java Object[] array
-   - If the array is 1-dimensional each element is a scalar 
+   - If the array is 1-dimensional each element is a scalar
    - Otherwise each element is an sub-array with identical shape (1 dimensional or more)"
   (:require [clojure.core.matrix.protocols :as mp]
             clojure.core.matrix.impl.persistent-vector
             [clojure.core.matrix.implementations :as imp]
             [clojure.core.matrix.impl.mathsops :as mops]
             [clojure.core.matrix.impl.wrappers :as wrap]
-            [clojure.core.matrix.utils :refer :all])
+            [clojure.core.matrix.utils :as u]
+            [clojure.core.matrix.macros :refer [error TODO is-object-array?]])
   (:import [java.util Arrays]))
 
 (set! *warn-on-reflection* true)
@@ -26,48 +29,53 @@
 
 (def ^:const OBJECT-ARRAY-CLASS (Class/forName "[Ljava.lang.Object;"))
 
-(defn construct-object-array ^objects [data]
-  (let [dims (long (mp/dimensionality data))]
-    (cond
-      (== dims 1)
-        (object-array (mp/element-seq data))
-      (== dims 0)
-        (mp/get-0d data)
-      :default
-        (object-array (map construct-object-array (mp/get-major-slice-seq data))))))
+(defn construct-object-array 
+  "Contructs a nested Object[] array from the sorce data array"
+  (^objects [data]
+    (let [dims (long (mp/dimensionality data))]
+      (cond
+        (== dims 1)
+          (object-array (mp/element-seq data))
+        (== dims 0)
+          (mp/get-0d data)
+        :default
+          (object-array (map construct-object-array (mp/get-major-slice-seq data)))))))
 
-(defn construct-nd ^objects [shape]
-  (let [dims (long (count shape))]
-        (cond
-          (== 1 dims) (object-array (long (first shape)))
-          (> dims 1)
-            (let [n (long (first shape))
-                  m (object-array n)
-                  ns (next shape)]
-              (dotimes [i n]
-                (aset m i (construct-nd ns)))
-              m)
-          :else (error "Can't make a nested object array of dimensionality: " dims))))
+(defn construct-nd 
+  "Constructs an empty (nil-filled) object array of the given shape."
+  (^objects [shape]
+    (let [dims (long (count shape))]
+          (cond
+            (== 1 dims) (object-array (long (first shape)))
+            (> dims 1)
+              (let [n (long (first shape))
+                    m (object-array n)
+                    ns (next shape)]
+                (dotimes [i n]
+                  (aset m i (construct-nd ns)))
+                m)
+            :else (error "Can't make a nested object array of dimensionality: " dims)))))
 
 (defn object-array-coerce
-  "Coerce to object array format, avoids copying sub-arrays if possible."
+  "Coerce to object array format, avoids copying Object[] sub-arrays if possible."
   ([m]
-  (if (> (long (mp/dimensionality m)) 0)
-    (if (is-object-array? m)
-      (let [^objects m m
-            n (count m)]
-        (loop [ret m i 0]
-          (if (< i n)
-            (let [mv (aget m i)
-                  cmv (object-array-coerce mv)]
-              (if (and (identical? m ret) (identical? mv cmv))
-                (recur ret (inc i))
-                (let [mm (copy-object-array m)]
-                  (aset mm i cmv)
-                  (recur mm (inc i)))))
-            ret)))
-      (object-array (map object-array-coerce (mp/get-major-slice-seq m))))
-    (mp/get-0d m))))
+    (let [dims (long (mp/dimensionality m))]
+      (cond 
+        (== dims 0) (mp/get-0d m)
+        :else (if (is-object-array? m)
+                (let [^objects m m
+                      n (count m)]
+                  (loop [ret m i 0]
+                    (if (< i n)
+                      (let [mv (aget ret i)
+                            cmv (object-array-coerce mv)]
+                        (if (identical? mv cmv)
+                          (recur ret (inc i))
+                          (let [ret (if (identical? m ret) (u/copy-object-array m) ret)]
+                            (aset ret i cmv)
+                            (recur ret (inc i)))))
+                      ret)))
+                (object-array (map object-array-coerce (mp/get-major-slice-seq m))))))))
 
 (def ^Double ZERO 0.0)
 
@@ -100,12 +108,12 @@
   (Class/forName "[Ljava.lang.Object;")
     (dimensionality [m]
       (let [^objects m m]
-        (+ 1 (long (mp/dimensionality (aget m 0))))))
+        (if (empty? m) 1 (inc (long (mp/dimensionality (aget m 0)))))))
     (is-vector? [m]
       (let [^objects m m]
         (or
          (== 0 (alength m))
-         (== 0 (long (mp/dimensionality (aget m 0)))))))
+         (mp/is-scalar? (aget m 0)))))
     (is-scalar? [m] false)
     (get-shape [m]
       (let [^objects m m]
@@ -138,7 +146,7 @@
     (get-1d [m x]
       (aget ^objects m (int x)))
     (get-2d [m x y]
-      (mp/get-1d (aget ^objects m (int x)) y))
+      (mp/get-1d (aget ^objects m (long x)) y))
     (get-nd [m indexes]
       (let [^objects m m
             dims (long (count indexes))]
@@ -154,11 +162,11 @@
 (extend-protocol mp/PIndexedSetting
   (Class/forName "[Ljava.lang.Object;")
     (set-1d [m x v]
-      (let [^objects arr (copy-object-array m)]
+      (let [^objects arr (u/copy-object-array m)]
         (aset arr (int x) v)
         arr))
     (set-2d [m x y v]
-      (let [^objects arr (copy-object-array m)
+      (let [^objects arr (u/copy-object-array m)
             x (int x)]
         (aset arr x (mp/set-1d (aget ^objects m x) y v))
         arr))
@@ -166,12 +174,12 @@
       (let [dims (long (count indexes))]
         (cond
           (== 1 dims)
-            (let [^objects arr (copy-object-array m)
+            (let [^objects arr (u/copy-object-array m)
                   x (int (first indexes))]
               (aset arr (int x) v)
               arr)
           (> dims 1)
-            (let [^objects arr (copy-object-array m)
+            (let [^objects arr (u/copy-object-array m)
                   x (int (first indexes))]
               (aset arr x (mp/set-nd (aget ^objects m x) (next indexes) v))
               arr)
@@ -273,12 +281,24 @@
 
 (extend-protocol mp/PValidateShape
   (Class/forName "[Ljava.lang.Object;")
-    (validate-shape [m]
-      (let [^objects m m
-            shapes (map mp/validate-shape (seq m))]
-        (if (mp/same-shapes? shapes)
-          (cons (alength m) (first shapes))
-          (error "Inconsistent shapes for sub arrays in object array")))))
+    (validate-shape 
+      ([m]
+        (let [sh (mp/get-shape m)
+              next-sh (next sh)
+              ^objects m m
+              shapes (map mp/validate-shape (seq m))]
+          (if (apply = next-sh shapes)
+            sh
+            (error "Inconsistent shapes for sub arrays in object array"))))
+      ([m expected-shape]
+        (when (empty? expected-shape) (error "Expected empty shape on object array."))
+        (let [next-sh (next expected-shape)
+              ^objects m m
+              shapes (map #(mp/validate-shape % next-sh) (seq m))]
+          (if (apply = next-sh shapes)
+            expected-shape
+            (error "Inconsistent shapes for sub arrays in object array: " shapes)))))
+    )
 
 (extend-protocol mp/PFunctionalOperations
   (Class/forName "[Ljava.lang.Object;")

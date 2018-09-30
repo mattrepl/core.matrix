@@ -4,12 +4,12 @@
 /.settings
 /classes
 /doc
-
-.lein-*
-
+/out
 .DS_Store
 .html
 bench
 .dump
 
 .nrepl-port
+
+/.lein-failures

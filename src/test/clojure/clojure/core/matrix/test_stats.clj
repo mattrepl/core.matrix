@@ -14,7 +14,7 @@
   (is (== 6 (sum [1 2 3])))
   (let [ss (sum [[1 1] [1 1] [1 2]])]
     (is (equals [3 4] ss))
-    (is (mutable? ss)))) 
+    (is (mutable? ss))))
 
 (deftest test-sum-of-squares
   (is (== 13 (sum-of-squares [2 3])))
@@ -36,3 +36,31 @@
   (is (equals [1.0] (normalise-probabilities [0])))
   (is (equals [0.5 0.5] (normalise-probabilities [0 0])))
   (is (equals [0.25 0.75] (normalise-probabilities [1 3]))))
+
+(defn approx
+  "returns true if expected and actual are within tolerance of each other"
+  ([exp actual] (approx exp actual 0.05))
+  ([exp actual tolerance]
+   (> tolerance  (Math/abs  (- exp actual)))))
+
+(deftest test-correlation
+  (is (approx 0.5298
+              (let [x [43 21 25 42 57 59]
+                    y [99 65 79 75 87 81]]
+                (correlation x y)))))
+
+(deftest test-r-squared
+  (is (= 1.0 (r-squared [1 2 3] [1 2 3])))
+  (is (= 1.0 (r-squared [1 nil 3] [1 nil 3] true)))
+  (is (= 0.0 (r-squared [1 2 3] [2 2 2])))
+  (is (nil? (r-squared ["" 2] [1 ""] true))))
+
+(deftest test-rmse
+  (is (approx 2.915
+              (rmse [7 10 12 10 10 8 7 8 11 13 10 8]
+                    [6 10 14 16 7 5 5 13 12 13 8 5]))))
+
+(deftest test-cosine-similarity
+  (is (approx 0.93857
+              (cosine-similarity [2 4 3 1 6]
+                                 [3 5 1 2 5]))))
